@@ -1,0 +1,121 @@
+{
+	"name": "@katren/vue-collection-lib",
+	"version": "0.1.8",
+	"description": "Reusable Vue 3 and PrimeVue CRUD grids, reference inputs, form helpers, HTTP utilities, and WebSocket-driven collection refresh.",
+	"keywords": [
+		"vue",
+		"vue3",
+		"primevue",
+		"typescript",
+		"crud",
+		"datatable",
+		"forms",
+		"websocket"
+	],
+	"author": "Andrey Mikhalevich",
+	"license": "MIT",
+	"private": false,
+	"type": "module",
+	"files": [
+		"src",
+		"examples",
+		"README.md",
+		"PUBLISHING.md",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		},
+		"./locales": {
+			"types": "./src/locales/index.ts",
+			"import": "./src/locales/index.ts"
+		},
+		"./i18n": {
+			"types": "./src/i18n.ts",
+			"import": "./src/i18n.ts"
+		},
+		"./components/crudGrid": {
+			"types": "./src/components/crudGrid/index.ts",
+			"import": "./src/components/crudGrid/index.ts"
+		},
+		"./components/crudGrid/types": {
+			"types": "./src/components/crudGrid/types.ts",
+			"import": "./src/components/crudGrid/types.ts"
+		},
+		"./components/crudGrid/CollectionGrid.vue": {
+			"import": "./src/components/crudGrid/CollectionGrid.vue"
+		},
+		"./components/reference": {
+			"types": "./src/components/reference/index.ts",
+			"import": "./src/components/reference/index.ts"
+		},
+		"./components/form": {
+			"types": "./src/components/form/index.ts",
+			"import": "./src/components/form/index.ts"
+		},
+		"./components/form/CollectionDirtyGuard.vue": {
+			"import": "./src/components/form/CollectionDirtyGuard.vue"
+		},
+		"./components/reference/ReferenceInput.vue": {
+			"import": "./src/components/reference/ReferenceInput.vue"
+		},
+		"./composables/form": {
+			"types": "./src/composables/form/index.ts",
+			"import": "./src/composables/form/index.ts"
+		},
+		"./composables/*": {
+			"types": "./src/composables/*.ts",
+			"import": "./src/composables/*.ts"
+		},
+		"./types/*": {
+			"types": "./src/types/*.ts",
+			"import": "./src/types/*.ts"
+		},
+		"./utils/*": {
+			"types": "./src/utils/*.ts",
+			"import": "./src/utils/*.ts"
+		},
+		"./api/*": {
+			"types": "./src/api/*.ts",
+			"import": "./src/api/*.ts"
+		}
+	},
+	"scripts": {
+		"type-check": "vue-tsc -p tsconfig.json --noEmit",
+		"type-check:examples": "vue-tsc -p tsconfig.examples.json --noEmit",
+		"test": "tsx --test tests/*.test.ts",
+		"check": "npm run type-check && npm run type-check:examples && npm run test",
+		"build": "npm run type-check",
+		"prepack": "npm run check"
+	},
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org/"
+	},
+	"peerDependencies": {
+		"primeicons": "^7.0.0",
+		"primevue": "^4.0.0",
+		"valibot": "^1.0.0",
+		"vue": "^3.5.0",
+		"vue-i18n": "^11.0.0",
+		"vue-router": "^4.5.0 || ^5.0.0"
+	},
+	"devDependencies": {
+		"@primeuix/themes": "^2.0.3",
+		"@types/node": "^24.13.1",
+		"@vitejs/plugin-vue": "^6.0.6",
+		"@vue/tsconfig": "^0.9.1",
+		"primeicons": "^7.0.0",
+		"primevue": "^4.5.5",
+		"tsx": "^4.20.6",
+		"typescript": "~6.0.2",
+		"valibot": "^1.4.1",
+		"vite": "^8.0.12",
+		"vue": "^3.5.34",
+		"vue-i18n": "^11.4.5",
+		"vue-router": "^5.1.0",
+		"vue-tsc": "^3.2.8"
+	}
+}

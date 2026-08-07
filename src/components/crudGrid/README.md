@@ -1,0 +1,211 @@
+# CRUD grid layer
+
+The reusable grid layer is split into:
+
+- `CollectionGrid.vue` — PrimeVue DataTable shell: command panel, context menu, lazy server pagination, sorting, inline row editing, keyboard shortcuts, row/cell cursor, footer values, route-based edit modes.
+- `GridCommandPanel.vue` — toolbar for grid commands.
+- `types.ts` — grid contracts.
+- `gridUtils.ts` — helpers for cloning rows and creating update objects with only modified editable columns.
+- `composables/useCollectionGrid.ts` — server list state, pagination, sorting, selection, cursor movement, session state restore.
+- `composables/useGridCommands.ts` — default commands and shortcut handling.
+
+The first prototype is `views/catalogueGroup/CatalogueGroupList.vue`.
+
+## Commands
+
+`CollectionGrid` supports three command modes:
+
+- `default` — ignore `commands` and use built-in commands only.
+- `append` — start with built-in commands, override built-ins with matching names, then append custom commands.
+- `replace` — use only `commands`; built-in names still inherit default labels, icons, shortcuts, and enabled rules unless overridden.
+
+```vue
+<CollectionGrid
+	:commands="commands"
+	commandsMode="append"
+/>
+```
+
+```ts
+const commands: GridCommand<CatalogueGroup, CatalogueGroupKey>[] = [
+	{
+		name: "exportSelected",
+		label: "Export selected",
+		icon: "pi pi-download",
+		shortcut: "Ctrl+E",
+		enabled: (row) => row !== null,
+		handler: async ({ rows, keys }) => {
+			console.log("export", rows, keys);
+		},
+	},
+];
+```
+
+To completely replace commands:
+
+```vue
+<CollectionGrid
+	:commands="commands"
+	commandsMode="replace"
+/>
+```
+
+To override a built-in command and prevent the default action:
+
+```ts
+const commands: GridCommand<CatalogueGroup, CatalogueGroupKey>[] = [
+	{
+		name: "delete",
+		labelKey: "Grid.commands.delete",
+		icon: "pi pi-trash",
+		shortcut: "Delete",
+		severity: "danger",
+		handler: async ({ keys, reload }) => {
+			await customDelete(keys);
+			await reload();
+		},
+	},
+];
+```
+
+To run custom logic and then the built-in command, set `runDefault: true`.
+
+Context menu commands use the same command model. If `contextCommands` is omitted, the context menu uses `commands` and `commandsMode`. If `contextCommands` is provided, `contextCommandsMode` controls how it is resolved. Use `:showContextMenu="false"` to disable the context menu. Do not use `:contextCommands="false"`; `contextCommands` is array-only to avoid Vue boolean prop casting for omitted props.
+
+## Search
+
+`CollectionGrid` includes a built-in `search` command. If a grid uses `commandsMode="replace"`, add the command explicitly:
+
+```ts
+const commands: GridCommand<MyRow, MyKey>[] = [
+	{ name: "create" },
+	{ name: "edit" },
+	{ name: "delete" },
+	{ name: "search" },
+	{ name: "refresh" },
+];
+```
+
+Search is configured per column. By default every column is searchable, the backend field equals the grid field, and the type is taken from `dataType` or defaults to `"string"`.
+
+```ts
+const columns: GridColumn<MyRow>[] = [
+	{
+		field: "name",
+		headerKey: "My.fields.name",
+		dataType: "string",
+		searchable: true,
+	},
+	{
+		field: "price",
+		headerKey: "My.fields.price",
+		dataType: "number",
+		searchField: "price",
+	},
+];
+```
+
+Text columns support:
+
+- `begins`: `ILIKE 'value%'`
+- `contains`: `ILIKE '%value%'`
+- `exact`: `= value`
+
+Boolean and reference columns support exact search by default. Number and date columns support exact and range search by default.
+
+Reference columns can map reference keys to backend filter fields:
+
+```ts
+{
+	field: "owner_ref",
+	headerKey: "My.fields.owner",
+	dataType: "reference",
+	searchDataType: "reference",
+	searchReferenceAutocomplete: ownerAutocomplete,
+	searchReferenceKeys: {
+		id: "owner_id",
+	},
+}
+```
+
+Applied criteria are displayed as chips under the command panel. Clicking a chip reopens the search dialog for that criterion. Removing a chip reloads the grid. Criteria are stored in grid state when `stateKey` is set.
+
+## Selection and search notes
+
+`CollectionGrid` now defaults to cell selection. Set `rowSelection` to `true` when you need the previous row-only cursor behavior.
+
+Pointer selection focuses the grid without scrolling the document. This preserves keyboard shortcuts and arrow navigation while preventing Chromium-based browsers from moving the collection to the top of the viewport between the two clicks of a double-click. Interactive controls inside rows keep their normal browser focus behavior.
+
+In cell selection mode the grid stores both the current row and current column. `Ctrl+F`, the command-panel search command, and a new search dialog use the current cell column as the initial search column when no existing criterion is being edited.
+
+String search operations are shown as radio buttons. Number and date columns support `exact` and `range` operations by default. A range creates separate `>=` and `<=` filters for the same server-side search field.
+
+Date columns are searched as a local calendar day by default. An exact date search becomes two filters:
+
+- `field >= YYYY-MM-DDT00:00:00.000`
+- `field <= YYYY-MM-DDT23:59:59.999`
+
+Set `searchDateOnly: false` on a column when the server expects exact datetime values instead.
+
+For formatted columns, keep display formatting and server filtering separate. Use `searchComponent` for a masked/formatted input, `searchValueToFilter` to convert the UI value to raw server data, and `searchValueLabel` for the chip label.
+
+```ts
+const onlyDigits = (value: unknown): string => {
+	return String(value ?? "").replace(/\D/g, "");
+};
+
+const phoneColumn = {
+	field: "phone",
+	headerKey: "phone",
+	dataType: "string",
+	format: (value: unknown): string => formatPhone(String(value ?? "")),
+	searchComponent: PhoneInput,
+	searchValueToFilter: (value: unknown): string => onlyDigits(value),
+	searchValueLabel: (value: unknown): string => formatPhone(String(value ?? "")),
+};
+```
+
+## DatePicker locale/date format
+
+The search dialog uses PrimeVue `DatePicker` without hardcoding a locale. Configure the project-level PrimeVue locale once so every DatePicker uses Russian labels and `dd.mm.yy` input formatting.
+
+```ts
+import { ru } from "primelocale/js/ru.js";
+
+export default defineNuxtConfig({
+	primevue: {
+		options: {
+			locale: {
+				...ru,
+				dateFormat: "dd.mm.yy",
+				firstDayOfWeek: 1,
+			},
+		},
+	},
+});
+```
+
+For non-Nuxt Vue projects, pass the same `locale` object to `app.use(PrimeVue, { locale })`.
+
+## Automatic refresh from CRUD events
+
+When the host application provides a `WSManager` and the grid API has `serviceName`, `CollectionGrid` automatically subscribes to:
+
+- `ServiceName.Create`;
+- `ServiceName.Update`;
+- `ServiceName.Delete`.
+
+The grid debounces incoming events and reloads its current page. It unsubscribes on unmount and restores subscriptions after WebSocket reconnection.
+
+```ts
+const productApi = createCrudApi({
+	api,
+	basePath: "/products",
+	serviceName: "Product",
+	getKeyValue: (key) => key.id,
+	fromListDTO,
+	fromDetailDTO,
+});
+```
+
+Use `eventService` on `CollectionGrid` to override the API metadata, `autoRefreshOnCrud` to disable event refresh, and `eventRefreshDelay` to change the debounce delay.

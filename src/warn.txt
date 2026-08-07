@@ -1,0 +1,26 @@
+ [Vue warn]: Invalid prop: type check failed for prop "bodyClass". Expected String with value "(row) => {
+				const classes = resolveConfiguredBodyClass(column, row);
+				if (!props.rowSelection && isSelectedCell(grid.rows.value.indexOf(row), columnIndex)) {
+					classes.push("crud-grid-cell-current");
+				}
+				return classes.join(" ");
+			}", got Function  
+  at <Column key="agc_code" field="agc_code" sortField="agc_code"  ... > 
+  at <DataTable editingRows= 
+Array []
+ onUpdate:editingRows=fn value= 
+Array(30) [ {…}, {…}, {…}, {…}, {…}, {…}, {…}, {…}, {…}, {…}, … ]
+  ... > 
+  at <CollectionGrid api= 
+Object { serviceName: "Product", list: async list(params, format), detail: async detail(key), create: async create(model), update: async update(key, model), delete: async remove(key) }
+ columns= 
+Array [ {…}, {…} ]
+ commands= 
+Array(3) [ {…}, {…}, {…} ]
+  ... > 
+  at <ProductList onVnodeUnmounted=fn<onVnodeUnmounted> ref=Ref< 
+Proxy { <target>: Proxy, <handler>: {…} }
+ > > 
+  at <RouterView> 
+  at <CollectionDirtyGuard enabled=false > 
+  at <App>
