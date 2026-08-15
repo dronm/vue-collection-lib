@@ -5,9 +5,11 @@ import {
 	onBeforeUnmount,
 	onMounted,
 	ref,
+	shallowRef,
+	watch,
 } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter, type RouteLocationRaw } from "vue-router";
+import { useRoute, useRouter, type RouteLocationRaw } from "vue-router";
 
 import Button from "primevue/button";
 import Checkbox from "primevue/checkbox";
@@ -22,6 +24,7 @@ import InputText from "primevue/inputtext";
 
 import { useWSManager } from "../../api/wsProvider";
 import { SortDirect, type CollectionSorter } from "../../types/collection";
+import { errorText } from "../../utils/errorText";
 import { useCollectionGrid } from "../../composables/useCollectionGrid";
 import {
 	findCommandByShortcut,
@@ -39,7 +42,13 @@ import {
 	cloneGridRow,
 	formatGridValue,
 	makeChangedModel,
+	makeCreateModel,
 } from "./gridUtils";
+import {
+	makeReferenceSelectionMessage,
+	REFERENCE_SELECTION_QUERY_PARAM,
+	referenceSelectionChannelName,
+} from "../../utils/referenceSelection";
 import {
 	buildSearchColumnOptions,
 	buildSearchCriterion,
@@ -87,6 +96,16 @@ const props = withDefaults(defineProps<{
 	showContextMenu?: boolean;
 	editMode?: GridEditMode;
 	routes?: GridRouteConfig<TModel>;
+	/**
+	 * Creates a fresh list-model draft for native inline creation.
+	 * When omitted, the create command keeps its legacy emit/route behavior.
+	 */
+	createRow?: () => TModel;
+	/**
+	 * Maps the edited inline draft to the API create payload.
+	 * Defaults to all editable grid columns.
+	 */
+	createModel?: (row: TModel) => TNew;
 	rowSelection?: boolean;
 	showCommandPanel?: boolean;
 	autoDelete?: boolean;
@@ -118,6 +137,11 @@ const emit = defineEmits<{
 	refresh: [];
 	selectionChange: [row: TModel | null];
 	cellChange: [cell: GridCellPosition<TModel> | null];
+	rowCreate: [payload: {
+		key: TKey;
+		model: TNew;
+		row: TModel;
+	}];
 	rowUpdate: [payload: {
 		key: TKey;
 		model: TUpd;
@@ -126,6 +150,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const route = useRoute();
 const router = useRouter();
 const wsManager = useWSManager();
 const activeContextMenuItems = ref<ContextMenuItem[]>([]);
@@ -163,10 +188,35 @@ const searchDialogVisible = ref(false);
 const editingSearchCriterion = ref<GridSearchCriterion | null>(null);
 const searchInitialField = ref<string | null>(null);
 const searchInitialValue = ref<string | null>(null);
-const editingRows = ref<TModel[]>([]);
+const editingRows = shallowRef<TModel[]>([]);
+const inlineCreateRow = shallowRef<TModel | null>(null);
+const inlineCreatePreviousSelection = shallowRef<{
+	row: TModel | null;
+	columnIndex: number | null;
+} | null>(null);
 const originalRows = new WeakMap<TModel, TModel>();
 const rootEl = ref<HTMLElement | null>(null);
 const pointerScrollPosition = ref<GridScrollPosition | null>(null);
+
+const referenceSelectionToken = computed(() => {
+	const value = route.query[REFERENCE_SELECTION_QUERY_PARAM];
+
+	return typeof value === "string" && value.trim() !== ""
+		? value
+		: null;
+});
+
+const referenceSelectionMode = computed(() => {
+	return referenceSelectionToken.value !== null;
+});
+
+const inlineEditing = computed(() => {
+	return props.editMode === "inline" && editingRows.value.length > 0;
+});
+
+const effectiveRowSelection = computed(() => {
+	return props.rowSelection || referenceSelectionMode.value;
+});
 
 const columnsRef = computed(() => props.columns);
 
@@ -176,7 +226,7 @@ const grid = useCollectionGrid<TModel, TKey, TNew, TUpd, TDetailModel>({
 	getKey: props.getKey,
 	stateKey: props.stateKey,
 	pageSize: props.pageSize,
-	rowSelection: props.rowSelection,
+	rowSelection: effectiveRowSelection.value,
 	defaultSorter: props.defaultSorter,
 });
 
@@ -185,7 +235,7 @@ const searchableColumns = computed(() => {
 });
 
 const currentSearchField = computed(() => {
-	if (props.rowSelection || grid.selectedCell.value === null) {
+	if (effectiveRowSelection.value || grid.selectedCell.value === null) {
 		return null;
 	}
 
@@ -196,16 +246,31 @@ const currentSearchField = computed(() => {
 });
 
 const visibleCommands = computed(() => {
-	return resolveGridCommands<TModel, TKey>(
+	let commands = resolveGridCommands<TModel, TKey>(
 		props.commands,
 		grid.selectedRow.value,
 		t,
 		props.commandsMode,
 	);
+
+	if (referenceSelectionMode.value) {
+		commands = commands.filter((command) => {
+			return command.name === "search" || command.name === "refresh";
+		});
+	}
+
+	if (inlineEditing.value) {
+		commands = commands.map((command) => ({
+			...command,
+			disabled: true,
+		}));
+	}
+
+	return commands;
 });
 
 const buildContextMenuItems = (row: TModel | null): ContextMenuItem[] => {
-	if (!props.showContextMenu) {
+	if (!props.showContextMenu || referenceSelectionMode.value || inlineEditing.value) {
 		return [];
 	}
 
@@ -268,12 +333,20 @@ const resolveRowClass = (row: TModel): string => {
 		...normalizeRowClass(props.getRowClass?.(row)),
 	];
 
+	if (inlineCreateRow.value === row) {
+		classes.push("crud-grid-row-new");
+	}
+
 	if (grid.isRowMarked(row)) {
 		classes.push("crud-grid-row-marked");
 	}
 
-	if (props.rowSelection && grid.selectedRow.value === row) {
+	if (effectiveRowSelection.value && grid.selectedRow.value === row) {
 		classes.push("crud-grid-row-current");
+	}
+
+	if (referenceSelectionMode.value) {
+		classes.push("crud-grid-row-selectable");
 	}
 
 	return classes.join(" ");
@@ -292,6 +365,7 @@ const crudEventService = computed(() => {
 
 let crudSubscriptionId: string | null = null;
 let eventRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let eventRefreshPending = false;
 let subscribedWhileConnected = false;
 
 const clearEventRefreshTimer = (): void => {
@@ -304,9 +378,21 @@ const clearEventRefreshTimer = (): void => {
 };
 
 const scheduleEventRefresh = (): void => {
+	if (inlineEditing.value) {
+		eventRefreshPending = true;
+		clearEventRefreshTimer();
+		return;
+	}
+
+	eventRefreshPending = false;
 	clearEventRefreshTimer();
 	eventRefreshTimer = setTimeout(() => {
 		eventRefreshTimer = null;
+
+		if (inlineEditing.value) {
+			eventRefreshPending = true;
+			return;
+		}
 
 		if (grid.loading.value) {
 			scheduleEventRefresh();
@@ -318,6 +404,12 @@ const scheduleEventRefresh = (): void => {
 		});
 	}, props.eventRefreshDelay);
 };
+
+watch(inlineEditing, (editing) => {
+	if (!editing && eventRefreshPending) {
+		scheduleEventRefresh();
+	}
+});
 
 const subscribeToCrudEvents = (): void => {
 	if (
@@ -348,6 +440,7 @@ const subscribeToCrudEvents = (): void => {
 };
 
 const unsubscribeFromCrudEvents = (): void => {
+	eventRefreshPending = false;
 	clearEventRefreshTimer();
 
 	if (wsManager !== null && crudSubscriptionId !== null) {
@@ -361,6 +454,10 @@ const pageChanged = async (event: {
 	first: number;
 	rows: number;
 }): Promise<void> => {
+	if (inlineEditing.value) {
+		return;
+	}
+
 	grid.setPage(event.first, event.rows);
 	await load();
 };
@@ -382,6 +479,10 @@ const normalizeSortDirection = (order: unknown): SortDirect | null => {
 };
 
 const sortChanged = async (event: DataTableSortEvent): Promise<void> => {
+	if (inlineEditing.value) {
+		return;
+	}
+
 	const nextSorter: CollectionSorter[] = [];
 
 	if (event.multiSortMeta?.length) {
@@ -445,14 +546,16 @@ const clearPointerScrollPosition = (): void => {
 	pointerScrollPosition.value = null;
 };
 
-const GRID_INTERACTIVE_POINTER_SELECTOR = [
+const GRID_INTERACTIVE_TARGET_SELECTOR = [
 	"a[href]",
 	"button",
 	"input",
 	"select",
 	"textarea",
 	"summary",
-	"[contenteditable='true']",
+	"[contenteditable]:not([contenteditable='false'])",
+	"[role='textbox']",
+	"[role='spinbutton']",
 	"[role='button']",
 	"[role='checkbox']",
 	"[role='combobox']",
@@ -461,9 +564,9 @@ const GRID_INTERACTIVE_POINTER_SELECTOR = [
 	"[role='switch']",
 ].join(",");
 
-const isInteractivePointerTarget = (target: EventTarget | null): boolean => {
+const isInteractiveGridTarget = (target: EventTarget | null): boolean => {
 	return target instanceof Element
-		&& target.closest(GRID_INTERACTIVE_POINTER_SELECTOR) !== null;
+		&& target.closest(GRID_INTERACTIVE_TARGET_SELECTOR) !== null;
 };
 
 const isGridDataRowTarget = (target: EventTarget | null): boolean => {
@@ -483,6 +586,12 @@ const onRowClick = (event: {
 		? event.originalEvent
 		: null;
 	focusGridRootWithoutScroll();
+
+	if (referenceSelectionMode.value) {
+		grid.selectRow(event.data);
+		emit("selectionChange", event.data);
+		return;
+	}
 
 	if (mouseEvent?.shiftKey) {
 		grid.selectRow(event.data, {
@@ -513,7 +622,7 @@ const onCellClick = (
 	rowIndex: number,
 	columnIndex: number,
 ): void => {
-	if (props.rowSelection) {
+	if (effectiveRowSelection.value) {
 		return;
 	}
 
@@ -558,7 +667,7 @@ const resolveCellPassThrough = (
 				: [];
 
 			if (
-				!props.rowSelection
+				!effectiveRowSelection.value
 				&& typeof rowIndex === "number"
 				&& isSelectedCell(rowIndex, columnIndex)
 			) {
@@ -643,7 +752,7 @@ const prepareContextMenuSelection = (
 		grid.clearMarkedRows();
 	}
 
-	if (!props.rowSelection && rowIndex !== null && columnIndex !== null) {
+	if (!effectiveRowSelection.value && rowIndex !== null && columnIndex !== null) {
 		grid.selectCell(row, rowIndex, columnIndex);
 		emit("cellChange", grid.selectedCell.value);
 	} else {
@@ -660,6 +769,15 @@ const openContextMenu = (
 	rowIndex: number | null,
 	columnIndex: number | null,
 ): void => {
+	if (inlineEditing.value) {
+		if (event.cancelable) {
+			event.preventDefault();
+		}
+		event.stopPropagation();
+		closeContextMenu();
+		return;
+	}
+
 	if (event.cancelable) {
 		event.preventDefault();
 	}
@@ -829,7 +947,7 @@ const onGridRootMouseDown = (event: MouseEvent): void => {
 		if (
 			event.cancelable
 			&& isGridDataRowTarget(event.target)
-			&& !isInteractivePointerTarget(event.target)
+			&& !isInteractiveGridTarget(event.target)
 		) {
 			// Chromium focuses a tabindex ancestor as the default mousedown action.
 			// Prevent that browser focus and apply our no-scroll focus explicitly.
@@ -1006,8 +1124,89 @@ const startInlineEdit = (row: TModel | null): boolean => {
 		return false;
 	}
 
+	if (editingRows.value.length > 0) {
+		return editingRows.value.includes(row);
+	}
+
 	originalRows.set(row, cloneGridRow(row));
 	editingRows.value = [row];
+	return true;
+};
+
+const restoreSelectionAfterInlineCreate = (): void => {
+	const previous = inlineCreatePreviousSelection.value;
+	inlineCreatePreviousSelection.value = null;
+
+	if (previous?.row && grid.rows.value.includes(previous.row)) {
+		if (effectiveRowSelection.value || previous.columnIndex === null) {
+			grid.selectRow(previous.row);
+		} else {
+			grid.selectCell(
+				previous.row,
+				grid.rows.value.indexOf(previous.row),
+				previous.columnIndex,
+			);
+		}
+		return;
+	}
+
+	const firstRow = grid.rows.value[0] ?? null;
+	if (firstRow === null) {
+		grid.selectRow(null);
+		return;
+	}
+
+	if (effectiveRowSelection.value) {
+		grid.selectRow(firstRow);
+		return;
+	}
+
+	const firstEditableColumn = props.columns.findIndex((column) => column.editable);
+	grid.selectCell(firstRow, 0, Math.max(firstEditableColumn, 0));
+};
+
+const discardInlineCreate = (): void => {
+	const row = inlineCreateRow.value;
+	if (row === null) {
+		return;
+	}
+
+	grid.rows.value = grid.rows.value.filter((item) => item !== row);
+	editingRows.value = editingRows.value.filter((item) => item !== row);
+	originalRows.delete(row);
+	inlineCreateRow.value = null;
+	restoreSelectionAfterInlineCreate();
+};
+
+const startInlineCreate = async (): Promise<boolean> => {
+	if (
+		props.editMode !== "inline"
+		|| !props.api.create
+		|| !props.createRow
+		|| editingRows.value.length > 0
+	) {
+		return false;
+	}
+
+	grid.error.value = null;
+	const row = props.createRow();
+	inlineCreatePreviousSelection.value = {
+		row: grid.selectedRow.value,
+		columnIndex: grid.selectedCell.value?.columnIndex ?? null,
+	};
+	inlineCreateRow.value = row;
+	grid.rows.value = [row, ...grid.rows.value];
+	originalRows.set(row, cloneGridRow(row));
+	editingRows.value = [row];
+
+	const firstEditableColumn = props.columns.findIndex((column) => column.editable);
+	if (effectiveRowSelection.value || firstEditableColumn < 0) {
+		grid.selectRow(row);
+	} else {
+		grid.selectCell(row, 0, firstEditableColumn);
+	}
+
+	await nextTick();
 	return true;
 };
 
@@ -1151,6 +1350,10 @@ const executeCommand = async (
 		return;
 	}
 
+	if (name === "create" && await startInlineCreate()) {
+		return;
+	}
+
 	if (await openRoute(name, row)) {
 		return;
 	}
@@ -1161,6 +1364,56 @@ const executeCommand = async (
 		emit("edit", row);
 	} else if (name === "copy" && row !== null) {
 		emit("copy", row);
+	}
+};
+
+const closeReferenceSelectionWindow = (): void => {
+	if (typeof window !== "undefined") {
+		window.close();
+	}
+};
+
+const returnReferenceSelection = (row: TModel): void => {
+	const token = referenceSelectionToken.value;
+	if (token === null || typeof window === "undefined") {
+		return;
+	}
+
+	const message = makeReferenceSelectionMessage(token, row);
+
+	if (typeof BroadcastChannel !== "undefined") {
+		const channel = new BroadcastChannel(referenceSelectionChannelName(token));
+		channel.postMessage(message);
+		channel.close();
+	}
+
+	if (window.opener !== null && !window.opener.closed) {
+		window.opener.postMessage(message, window.location.origin);
+	}
+
+	setTimeout(closeReferenceSelectionWindow, 0);
+};
+
+const activateRow = async (row: TModel | null): Promise<void> => {
+	if (row === null || inlineEditing.value) {
+		return;
+	}
+
+	grid.selectRow(row);
+	emit("selectionChange", row);
+
+	if (referenceSelectionMode.value) {
+		returnReferenceSelection(row);
+		return;
+	}
+
+	await executeCommand("edit");
+};
+
+const selectCurrentReferenceRow = (): void => {
+	const row = grid.selectedRow.value;
+	if (row !== null) {
+		returnReferenceSelection(row);
 	}
 };
 
@@ -1180,6 +1433,20 @@ const isSearchTypingCharacter = (event: KeyboardEvent): boolean => {
 };
 
 const onRootKeydown = async (event: KeyboardEvent): Promise<void> => {
+	// Keyboard events from inputs and other editor controls bubble to the grid
+	// root. They belong to the control, not to collection-level shortcuts.
+	if (isInteractiveGridTarget(event.target)) {
+		return;
+	}
+
+	// While an inline row is being edited, suspend grid keyboard routing even
+	// if focus temporarily returns to the grid root. This prevents typed text
+	// from opening the search dialog and avoids command/arrow shortcuts acting
+	// on the collection behind the active editor.
+	if (inlineEditing.value) {
+		return;
+	}
+
 	if (isSearchShortcut(event)) {
 		event.preventDefault();
 		openSearchDialog();
@@ -1189,6 +1456,18 @@ const onRootKeydown = async (event: KeyboardEvent): Promise<void> => {
 	if (!searchDialogVisible.value && isSearchTypingCharacter(event)) {
 		event.preventDefault();
 		openSearchDialog(null, event.key);
+		return;
+	}
+
+	if (
+		event.key === "Enter"
+		&& !event.ctrlKey
+		&& !event.metaKey
+		&& !event.altKey
+		&& !event.shiftKey
+	) {
+		event.preventDefault();
+		await activateRow(grid.selectedRow.value);
 		return;
 	}
 
@@ -1208,8 +1487,7 @@ const onRootKeydown = async (event: KeyboardEvent): Promise<void> => {
 const onRowDoubleClick = async (event: {
 	data: TModel;
 }): Promise<void> => {
-	grid.selectRow(event.data);
-	await executeCommand("edit");
+	await activateRow(event.data);
 };
 
 const onRowEditInit = (event: {
@@ -1222,6 +1500,36 @@ const onRowEditSave = async (event: {
 	data: TModel;
 	newData: TModel;
 }): Promise<void> => {
+	if (inlineCreateRow.value === event.data) {
+		if (!props.api.create) {
+			return;
+		}
+
+		const model = props.createModel
+			? props.createModel(event.newData)
+			: makeCreateModel<TModel, TNew>(event.newData, props.columns);
+
+		try {
+			const key = await props.api.create(model);
+			emit("rowCreate", {
+				key,
+				model,
+				row: event.newData,
+			});
+
+			inlineCreateRow.value = null;
+			inlineCreatePreviousSelection.value = null;
+			editingRows.value = [];
+			originalRows.delete(event.data);
+			await load();
+		} catch (err: unknown) {
+			Object.assign(event.data, event.newData);
+			grid.error.value = errorText(err);
+			editingRows.value = [event.data];
+		}
+		return;
+	}
+
 	if (!props.api.update) {
 		return;
 	}
@@ -1245,6 +1553,17 @@ const onRowEditSave = async (event: {
 		row: event.newData,
 	});
 	await load();
+};
+
+const onRowEditCancel = (event: {
+	data: TModel;
+}): void => {
+	if (inlineCreateRow.value === event.data) {
+		discardInlineCreate();
+		return;
+	}
+
+	originalRows.delete(event.data);
 };
 
 const columnFooter = (column: GridColumn<TModel>): string => {
@@ -1308,6 +1627,31 @@ defineExpose<CollectionGridExpose>({
 			@open="openSearchCriterion"
 			@remove="removeSearchCriterion"
 		/>
+
+		<div
+			v-if="referenceSelectionMode"
+			class="crud-grid-selection-mode"
+		>
+			<div class="crud-grid-selection-mode-text">
+				<strong>{{ t("Grid.selectionMode.title") }}</strong>
+				<span>{{ t("Grid.selectionMode.hint") }}</span>
+			</div>
+			<div class="crud-grid-selection-mode-actions">
+				<Button
+					:label="t('Grid.selectionMode.select')"
+					icon="pi pi-check"
+					:disabled="grid.selectedRow.value === null"
+					@click="selectCurrentReferenceRow"
+				/>
+				<Button
+					:label="t('Grid.selectionMode.cancel')"
+					icon="pi pi-times"
+					severity="secondary"
+					outlined
+					@click="closeReferenceSelectionWindow"
+				/>
+			</div>
+		</div>
 
 		<div
 			v-if="grid.error.value"
@@ -1419,6 +1763,7 @@ defineExpose<CollectionGridExpose>({
 			@row-dblclick="onRowDoubleClick"
 			@row-edit-init="onRowEditInit"
 			@row-edit-save="onRowEditSave"
+			@row-edit-cancel="onRowEditCancel"
 		>
 			<template #empty>
 				{{ t("Grid.empty") }}
@@ -1442,7 +1787,7 @@ defineExpose<CollectionGridExpose>({
 							'crud-grid-cell-content',
 							column.align === 'right' ? 'crud-grid-cell-content--right' : '',
 							column.align === 'center' ? 'crud-grid-cell-content--center' : '',
-							!props.rowSelection && isSelectedCell(index, columnIndex) ? 'crud-grid-cell-current-marker' : '',
+							!effectiveRowSelection && isSelectedCell(index, columnIndex) ? 'crud-grid-cell-current-marker' : '',
 						]"
 						@click="onCellClick(data, index, columnIndex)"
 					>
@@ -1498,7 +1843,7 @@ defineExpose<CollectionGridExpose>({
 			</Column>
 
 			<Column
-				v-if="props.editMode === 'inline'"
+				v-if="props.editMode === 'inline' && !referenceSelectionMode"
 				:rowEditor="true"
 				headerStyle="width: 7rem"
 				bodyStyle="text-align: center"
@@ -1514,6 +1859,39 @@ defineExpose<CollectionGridExpose>({
 
 
 <style scoped>
+.crud-grid-selection-mode {
+	align-items: center;
+	background: var(--p-blue-50, rgb(239 246 255));
+	border: 1px solid var(--p-blue-200, rgb(191 219 254));
+	border-radius: var(--p-border-radius-md, 0.375rem);
+	display: flex;
+	gap: 1rem;
+	justify-content: space-between;
+	margin-bottom: 0.75rem;
+	padding: 0.5rem 0.75rem;
+}
+
+.crud-grid-selection-mode-text {
+	display: flex;
+	flex-direction: column;
+	font-size: 0.875rem;
+	gap: 0.125rem;
+}
+
+.crud-grid-selection-mode-actions {
+	display: flex;
+	flex: 0 0 auto;
+	gap: 0.5rem;
+}
+
+:deep(.crud-grid-row-new > td) {
+	background: var(--p-green-50, rgb(240 253 244));
+}
+
+:deep(.crud-grid-row-selectable) {
+	cursor: pointer;
+}
+
 .crud-grid-error {
 	background: var(--p-red-50, rgb(254 242 242));
 	border: 1px solid var(--p-red-200, rgb(254 202 202));

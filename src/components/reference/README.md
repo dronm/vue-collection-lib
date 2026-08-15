@@ -37,7 +37,10 @@ const objectAutocomplete = referenceAutocompleteEq({
 				params: value.keys ?? {},
 			}),
 		}"
-		@select-request="openObjectCollection"
+		:selectAction="{
+			route: () => ({ name: 'objects' }),
+			target: '_blank',
+		}"
 	/>
 </template>
 ```
@@ -66,3 +69,16 @@ const updateModel = mutation.buildUpdateModel(form.value);
 With `mode: "keys"`, `{ keys: { id: 123 }, descr: "object A" }` submits as `{ id: 123 }`.
 
 With `mode: "key", keyField: "id"`, it submits as `123`.
+
+## Select from collection
+
+When `selectAction.target` is `_blank`, `ReferenceInput` opens the configured collection route as a picker. The library adds an internal selection token to the route; `CollectionGrid` detects it automatically and shows a selection-mode banner. No changes are required in the target list view.
+
+In selection mode:
+
+- create/edit/copy/delete and the context menu are suppressed; search and refresh remain available;
+- double-clicking a row or pressing `Enter` returns that row to the originating `ReferenceInput`;
+- the selected row is converted with the same `keyFields`/`descrFields` autocomplete configuration, so the reference description is immediately available;
+- the picker tab closes after selection.
+
+`selectAction` values that do not target `_blank` keep their normal navigation behavior.

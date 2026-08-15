@@ -14,6 +14,12 @@ const en = {
 			back: "Back",
 			search: "Search",
 		},
+		selectionMode: {
+			title: "Selection mode",
+			hint: "Double-click a row or press Enter to select it.",
+			select: "Select",
+			cancel: "Cancel",
+		},
 		editModes: {
 			inline: "Inline",
 			modal: "Modal",

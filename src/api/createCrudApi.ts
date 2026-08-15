@@ -176,10 +176,17 @@ export const createCrudApi = <
 		TUpd
 	>,
 ) => {
-	const list = async (
+	async function list(
+		params?: CollectionParams,
+	): Promise<CollectionResponse<TListModel>>;
+	async function list(
+		params: CollectionParams | undefined,
+		format: ExportFormats,
+	): Promise<void>;
+	async function list(
 		params?: CollectionParams,
 		format?: ExportFormats,
-	): Promise<CollectionResponse<TListModel> | void> => {
+	): Promise<CollectionResponse<TListModel> | void> {
 		const response = await options.api.get<unknown>(
 			options.basePath,
 			buildCollectionQuery(params, format),
@@ -195,7 +202,7 @@ export const createCrudApi = <
 			rows: collection.rows.map(options.fromListDTO),
 			agg: collection.agg,
 		};
-	};
+	}
 
 	const detail = async (
 		key: TKey,

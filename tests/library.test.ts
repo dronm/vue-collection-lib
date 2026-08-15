@@ -8,8 +8,15 @@ import {
 	normalizeCollectionResponse,
 } from "../src/api/createCrudApi.ts";
 import { transformJSON } from "../src/api/transformJSON.ts";
+import { makeCreateModel } from "../src/components/crudGrid/gridUtils.ts";
 import { useCollectionFormSubmit } from "../src/composables/form/useCollectionFormSubmit.ts";
 import { useFormMutation } from "../src/composables/form/useFormMutation.ts";
+import {
+	createReferenceSelectionToken,
+	isReferenceSelectionMessage,
+	makeReferenceSelectionMessage,
+	referenceSelectionChannelName,
+} from "../src/utils/referenceSelection.ts";
 
 test("normalizes collection totals", () => {
 	const result = normalizeCollectionResponse<{ id: number }>({
@@ -176,4 +183,60 @@ test("converts only valid ISO date strings", () => {
 
 	assert.ok(result.valid instanceof Date);
 	assert.equal(result.invalid, "2026-99-99");
+});
+
+
+test("builds isolated reference selection sessions", () => {
+	const token = createReferenceSelectionToken();
+	const message = makeReferenceSelectionMessage(token, {
+		id: 7,
+		name: "Russia",
+	});
+
+	assert.ok(token.length > 0);
+	assert.ok(referenceSelectionChannelName(token).endsWith(token));
+	assert.equal(isReferenceSelectionMessage(message), true);
+	assert.equal(isReferenceSelectionMessage({ ...message, token: "" }), false);
+	assert.equal(isReferenceSelectionMessage({ ...message, row: null }), false);
+});
+
+test("builds inline create payload from editable columns", () => {
+	type Row = {
+		id: number;
+		name: string;
+		active: boolean;
+	};
+	type New = {
+		name: string;
+		active: boolean;
+	};
+
+	const model = makeCreateModel<Row, New>(
+		{
+			id: 0,
+			name: "New row",
+			active: true,
+		},
+		[
+			{
+				field: "id",
+				headerKey: "id",
+			},
+			{
+				field: "name",
+				headerKey: "name",
+				editable: true,
+			},
+			{
+				field: "active",
+				headerKey: "active",
+				editable: true,
+			},
+		],
+	);
+
+	assert.deepEqual(model, {
+		name: "New row",
+		active: true,
+	});
 });

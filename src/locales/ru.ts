@@ -14,6 +14,12 @@ const ru = {
 			back: "Назад",
 			search: "Поиск",
 		},
+		selectionMode: {
+			title: "Режим выбора",
+			hint: "Дважды щёлкните строку или нажмите Enter, чтобы выбрать её.",
+			select: "Выбрать",
+			cancel: "Отмена",
+		},
 		editModes: {
 			inline: "В строке",
 			modal: "Модально",

@@ -24,6 +24,24 @@ const valuesEqual = (
 	return Object.is(left, right);
 };
 
+export const makeCreateModel = <
+	TModel extends object,
+	TNew,
+>(
+	current: TModel,
+	columns: GridColumn<TModel>[],
+): TNew => {
+	const result: Record<string, unknown> = {};
+
+	columns
+		.filter((column) => column.editable)
+		.forEach((column) => {
+			result[column.field] = current[column.field];
+		});
+
+	return result as TNew;
+};
+
 export const makeChangedModel = <
 	TModel extends object,
 	TUpd extends object,

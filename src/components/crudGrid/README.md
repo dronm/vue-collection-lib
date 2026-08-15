@@ -72,6 +72,39 @@ To run custom logic and then the built-in command, set `runDefault: true`.
 
 Context menu commands use the same command model. If `contextCommands` is omitted, the context menu uses `commands` and `commandsMode`. If `contextCommands` is provided, `contextCommandsMode` controls how it is resolved. Use `:showContextMenu="false"` to disable the context menu. Do not use `:contextCommands="false"`; `contextCommands` is array-only to avoid Vue boolean prop casting for omitted props.
 
+## Native inline creation
+
+When `editMode="inline"`, `CollectionGrid` can create records directly in the grid. Provide `createRow` to build a fresh list-model draft. The standard `create` command then prepends that draft, enters row edit mode, and uses the row editor check/cancel buttons to save or discard it.
+
+```ts
+const createRow = (): ProductBrandGroup => ({
+	id: 0,
+	name: "",
+});
+```
+
+```vue
+<CollectionGrid
+	:api="productBrandGroupApi"
+	:columns="columns"
+	dataKey="id"
+	:getKey="getKey"
+	:createRow="createRow"
+	editMode="inline"
+/>
+```
+
+By default, the create payload contains every column marked `editable: true`. If the list model differs from the API create model, provide `createModel`:
+
+```ts
+const createModel = (row: ProductRow): ProductNew => ({
+	name: row.name,
+	category_id: row.category_ref?.keys.id ?? null,
+});
+```
+
+`createRow` should populate key fields with a safe temporary value (for example `id: 0` or a negative ID), because the grid may call `getKey()` while the draft is selected. Only one inline edit/create session is active at a time. While it is active, collection commands, sorting, paging, context commands, keyboard shortcuts, and WebSocket auto-refresh are suspended. Cancel removes a new draft without calling the API; save calls `api.create()`, emits `rowCreate`, and reloads the collection. If `createRow` is omitted, the create command keeps its previous route/`create` event behavior.
+
 ## Search
 
 `CollectionGrid` includes a built-in `search` command. If a grid uses `commandsMode="replace"`, add the command explicitly:
@@ -135,6 +168,10 @@ Applied criteria are displayed as chips under the command panel. Clicking a chip
 `CollectionGrid` now defaults to cell selection. Set `rowSelection` to `true` when you need the previous row-only cursor behavior.
 
 Pointer selection focuses the grid without scrolling the document. This preserves keyboard shortcuts and arrow navigation while preventing Chromium-based browsers from moving the collection to the top of the viewport between the two clicks of a double-click. Interactive controls inside rows keep their normal browser focus behavior.
+
+Grid-level keyboard handling is suspended while an inline row is actively being edited. Key events originating from inputs, selects, textareas, contenteditable elements, and ARIA editor controls are also ignored by the grid, so typing in an inline editor does not open search or trigger collection shortcuts.
+
+`Enter` activates the current row with the same behavior as a row double-click. In a normal collection this runs the `edit` command. When the collection was opened by `ReferenceInput` as a selection picker, both `Enter` and double-click return the current row to the reference field and close the picker.
 
 In cell selection mode the grid stores both the current row and current column. `Ctrl+F`, the command-panel search command, and a new search dialog use the current cell column as the initial search column when no existing criterion is being edited.
 

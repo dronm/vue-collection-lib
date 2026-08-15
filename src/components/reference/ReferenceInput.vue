@@ -1,6 +1,7 @@
 <script setup lang="ts" generic="TRow extends ReferenceRow, TKeys extends ReferenceKeys">
 import {
 	computed,
+	onBeforeUnmount,
 	shallowRef,
 } from "vue";
 import { useRouter } from "vue-router";
@@ -22,6 +23,12 @@ import {
 	referenceFromRow,
 } from "../../utils/reference";
 import { errorText } from "../../utils/errorText";
+import {
+	createReferenceSelectionToken,
+	isReferenceSelectionMessage,
+	REFERENCE_SELECTION_QUERY_PARAM,
+	referenceSelectionChannelName,
+} from "../../utils/referenceSelection";
 
 type ReferenceOption = ReferenceValue<TKeys> & {
 	__row: TRow;
@@ -217,6 +224,40 @@ const openCurrent = async (): Promise<void> => {
 	await openRoute(route, props.openAction?.target);
 };
 
+let selectionChannel: BroadcastChannel | null = null;
+let selectionToken: string | null = null;
+
+const onSelectionWindowMessage = (event: MessageEvent<unknown>): void => {
+	if (
+		typeof window === "undefined"
+		|| event.origin !== window.location.origin
+		|| !isReferenceSelectionMessage(event.data)
+		|| event.data.token !== selectionToken
+	) {
+		return;
+	}
+
+	const option = optionFromRow(event.data.row as TRow);
+	selectOption({ value: option });
+	closeSelectionSession();
+};
+
+const closeSelectionSession = (): void => {
+	selectionChannel?.close();
+	selectionChannel = null;
+	selectionToken = null;
+
+	if (typeof window !== "undefined") {
+		window.removeEventListener("message", onSelectionWindowMessage);
+	}
+};
+
+const acceptSelectionRow = (row: TRow): void => {
+	const option = optionFromRow(row);
+	selectOption({ value: option });
+	closeSelectionSession();
+};
+
 const requestSelect = async (): Promise<void> => {
 	if (!canSelect.value) {
 		return;
@@ -224,12 +265,62 @@ const requestSelect = async (): Promise<void> => {
 
 	emit("selectRequest");
 
-	const route = typeof props.selectAction?.route === "function"
+	const routeValue = typeof props.selectAction?.route === "function"
 		? props.selectAction.route()
 		: props.selectAction?.route;
 
-	await openRoute(route, props.selectAction?.target);
+	if (!routeValue) {
+		return;
+	}
+
+	if (props.selectAction?.target !== "_blank" || typeof window === "undefined") {
+		await openRoute(routeValue, props.selectAction?.target);
+		return;
+	}
+
+	closeSelectionSession();
+	selectionToken = createReferenceSelectionToken();
+
+	const resolved = router.resolve(routeValue);
+	const href = router.resolve({
+		path: resolved.path,
+		query: {
+			...resolved.query,
+			[REFERENCE_SELECTION_QUERY_PARAM]: selectionToken,
+		},
+		hash: resolved.hash,
+	}).href;
+
+	if (typeof BroadcastChannel !== "undefined") {
+		selectionChannel = new BroadcastChannel(
+			referenceSelectionChannelName(selectionToken),
+		);
+		selectionChannel.onmessage = (event: MessageEvent<unknown>) => {
+			if (
+				!isReferenceSelectionMessage(event.data)
+				|| event.data.token !== selectionToken
+			) {
+				return;
+			}
+
+			acceptSelectionRow(event.data.row as TRow);
+		};
+	}
+
+	window.addEventListener("message", onSelectionWindowMessage);
+
+	// The picker is an internal same-origin route. Keep window.opener available as
+	// a fallback transport; BroadcastChannel remains the primary transport.
+	const popup = window.open(href, "_blank");
+
+	if (popup === null) {
+		closeSelectionSession();
+	}
 };
+
+onBeforeUnmount(() => {
+	closeSelectionSession();
+});
 
 const clearValue = (): void => {
 	emit("update:modelValue", null);

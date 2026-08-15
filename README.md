@@ -12,7 +12,7 @@ The package provides a server-driven CRUD grid, reference/autocomplete input, fo
 - string, number, boolean, date, range, and reference search criteria;
 - inline, modal, page, and tab edit modes;
 - automatic collection reload after WebSocket CRUD events;
-- reference autocomplete with open, select, and clear actions;
+- reference autocomplete with open, collection-picker select, and clear actions;
 - create/update payload generation with changed fields only;
 - reference-to-key payload mapping;
 - Valibot validation and normalized API/field errors;
@@ -242,6 +242,10 @@ DELETE /products/{key}
 ## CollectionGrid
 
 Row and cell pointer selection keeps the current document scroll position while focusing the grid for keyboard shortcuts. This avoids the Chromium/Edge/mobile Chrome jump that can otherwise move a different row under the second click of a double-click.
+
+When inline row editing is active, collection-level keyboard routing is suspended. Keyboard events from editor controls are also left to those controls, so typing in an input or reference autocomplete cannot open the collection search dialog or trigger grid shortcuts.
+
+Pressing `Enter` on the grid activates the current row exactly like a double-click. Normally this runs the edit action. A collection opened from a `ReferenceInput` select action is automatically switched into selection mode instead: it shows a picker banner, suppresses mutating commands, and returns the selected row to the originating reference input on `Enter` or double-click.
 
 ```vue
 <script setup lang="ts">
