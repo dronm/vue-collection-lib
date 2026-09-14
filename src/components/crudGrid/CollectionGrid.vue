@@ -22,14 +22,23 @@ import Dialog from "primevue/dialog";
 import InputNumber from "primevue/inputnumber";
 import InputText from "primevue/inputtext";
 
+import ReferenceKeyInput from "../reference/ReferenceKeyInput.vue";
+import ReferenceKeyLabel from "../reference/ReferenceKeyLabel.vue";
+
 import { useWSManager } from "../../api/wsProvider";
-import { SortDirect, type CollectionSorter } from "../../types/collection";
+import {
+	SortDirect,
+	type CollectionParams,
+	type CollectionSorter,
+} from "../../types/collection";
 import { errorText } from "../../utils/errorText";
 import { useCollectionGrid } from "../../composables/useCollectionGrid";
+import { useCollectionHierarchy } from "../../composables/useCollectionHierarchy";
 import {
 	findCommandByShortcut,
 	resolveGridCommands,
 } from "../../composables/useGridCommands";
+import CollectionBreadcrumbs from "./CollectionBreadcrumbs.vue";
 import GridCommandPanel from "./GridCommandPanel.vue";
 import GridSearchDialog from "./GridSearchDialog.vue";
 import GridSearchPanel from "./GridSearchPanel.vue";
@@ -39,6 +48,10 @@ import {
 	type GridScrollPosition,
 } from "./focusUtils";
 import {
+	applyGridInlineValue,
+	getReactiveGridEditRow,
+} from "./inlineEditing";
+import {
 	cloneGridRow,
 	formatGridValue,
 	makeChangedModel,
@@ -46,8 +59,8 @@ import {
 } from "./gridUtils";
 import {
 	makeReferenceSelectionMessage,
-	REFERENCE_SELECTION_QUERY_PARAM,
 	referenceSelectionChannelName,
+	referenceSelectionTokenFromQuery,
 } from "../../utils/referenceSelection";
 import {
 	buildSearchColumnOptions,
@@ -63,8 +76,10 @@ import type {
 	GridCommandEvent,
 	GridCommandListMode,
 	GridCommandRuntime,
+	GridCreateContext,
 	GridDeleteEvent,
 	GridEditMode,
+	GridHierarchyConfig,
 	GridRowClass,
 	GridRowClassResolver,
 	GridRouteConfig,
@@ -86,6 +101,7 @@ const props = withDefaults(defineProps<{
 	getKey: (row: TModel) => TKey;
 	getRowClass?: GridRowClassResolver<TModel>;
 	stateKey?: string;
+	baseParams?: CollectionParams;
 	pageSize?: number;
 	rowsPerPageOptions?: number[];
 	defaultSorter?: CollectionSorter[];
@@ -100,14 +116,16 @@ const props = withDefaults(defineProps<{
 	 * Creates a fresh list-model draft for native inline creation.
 	 * When omitted, the create command keeps its legacy emit/route behavior.
 	 */
-	createRow?: () => TModel;
+	createRow?: (context?: GridCreateContext) => TModel;
 	/**
 	 * Maps the edited inline draft to the API create payload.
 	 * Defaults to all editable grid columns.
 	 */
 	createModel?: (row: TModel) => TNew;
+	hierarchy?: GridHierarchyConfig<TModel>;
 	rowSelection?: boolean;
 	showCommandPanel?: boolean;
+	showCommandShortcuts?: boolean;
 	autoDelete?: boolean;
 	confirmDelete?: boolean;
 	eventService?: string;
@@ -119,6 +137,7 @@ const props = withDefaults(defineProps<{
 	editMode: "modal",
 	rowSelection: false,
 	showCommandPanel: true,
+	showCommandShortcuts: true,
 	commandsMode: "replace",
 	contextCommandsMode: "replace",
 	showContextMenu: true,
@@ -130,7 +149,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
 	command: [event: GridCommandEvent<TModel, TKey>];
-	create: [];
+	create: [context?: GridCreateContext];
 	edit: [row: TModel];
 	copy: [row: TModel];
 	delete: [event: GridDeleteEvent<TModel, TKey>];
@@ -190,6 +209,7 @@ const searchInitialField = ref<string | null>(null);
 const searchInitialValue = ref<string | null>(null);
 const editingRows = shallowRef<TModel[]>([]);
 const inlineCreateRow = shallowRef<TModel | null>(null);
+const inlineCreateContext = shallowRef<GridCreateContext | undefined>(undefined);
 const inlineCreatePreviousSelection = shallowRef<{
 	row: TModel | null;
 	columnIndex: number | null;
@@ -199,11 +219,7 @@ const rootEl = ref<HTMLElement | null>(null);
 const pointerScrollPosition = ref<GridScrollPosition | null>(null);
 
 const referenceSelectionToken = computed(() => {
-	const value = route.query[REFERENCE_SELECTION_QUERY_PARAM];
-
-	return typeof value === "string" && value.trim() !== ""
-		? value
-		: null;
+	return referenceSelectionTokenFromQuery(route.query);
 });
 
 const referenceSelectionMode = computed(() => {
@@ -219,12 +235,47 @@ const effectiveRowSelection = computed(() => {
 });
 
 const columnsRef = computed(() => props.columns);
+const hierarchyConfigRef = computed(() => props.hierarchy);
+const dataKeyRef = computed(() => props.dataKey);
+const stateKeyRef = computed(() => props.stateKey);
+const hierarchy = useCollectionHierarchy<TModel>({
+	config: hierarchyConfigRef,
+	dataKey: dataKeyRef,
+	stateKey: stateKeyRef,
+});
+
+const baseParamsRef = computed<CollectionParams | undefined>(() => {
+	const external = props.baseParams;
+	const hierarchical = hierarchy.baseParams.value;
+
+	if (!external) {
+		return hierarchical;
+	}
+
+	if (!hierarchical) {
+		return external;
+	}
+
+	return {
+		...external,
+		...hierarchical,
+		filter: [
+			...(external.filter ?? []),
+			...(hierarchical.filter ?? []),
+		],
+		sorter: [
+			...(hierarchical.sorter ?? []),
+			...(external.sorter ?? []),
+		],
+	};
+});
 
 const grid = useCollectionGrid<TModel, TKey, TNew, TUpd, TDetailModel>({
 	api: props.api,
 	columns: columnsRef,
 	getKey: props.getKey,
 	stateKey: props.stateKey,
+	baseParams: baseParamsRef,
 	pageSize: props.pageSize,
 	rowSelection: effectiveRowSelection.value,
 	defaultSorter: props.defaultSorter,
@@ -245,6 +296,14 @@ const currentSearchField = computed(() => {
 		: null;
 });
 
+const hierarchyText = (
+	value: string | undefined,
+	key: string | undefined,
+	fallbackKey: string,
+): string => {
+	return value ?? t(key ?? fallbackKey);
+};
+
 const visibleCommands = computed(() => {
 	let commands = resolveGridCommands<TModel, TKey>(
 		props.commands,
@@ -253,9 +312,68 @@ const visibleCommands = computed(() => {
 		props.commandsMode,
 	);
 
+	if (hierarchy.enabled.value) {
+		const createIndex = commands.findIndex((command) => command.name === "create");
+		if (createIndex >= 0) {
+			const createCommand = commands[createIndex];
+			const configuredCreateCommand = props.commands?.find((command) => command.name === "create");
+			const hasConfiguredCreateLabel = configuredCreateCommand?.label !== undefined
+				|| configuredCreateCommand?.labelKey !== undefined;
+
+			if (createCommand && !hasConfiguredCreateLabel) {
+				commands[createIndex] = {
+					...createCommand,
+					label: hierarchyText(
+						props.hierarchy?.createItemLabel,
+						props.hierarchy?.createItemLabelKey,
+						"Grid.hierarchy.createItem",
+					),
+				};
+			}
+
+			if (!commands.some((command) => command.name === "createGroup")) {
+				commands.splice(createIndex + 1, 0, {
+					name: "createGroup",
+					label: hierarchyText(
+						props.hierarchy?.createGroupLabel,
+						props.hierarchy?.createGroupLabelKey,
+						"Grid.hierarchy.createGroup",
+					),
+					icon: props.hierarchy?.createGroupIcon ?? "pi pi-folder-plus",
+					disabled: createCommand?.disabled ?? false,
+				});
+			}
+		}
+
+		if (hierarchy.allowFlatView.value && !commands.some((command) => command.name === "toggleHierarchyView")) {
+			const hierarchyMode = hierarchy.viewMode.value === "hierarchy";
+			commands.push({
+				name: "toggleHierarchyView",
+				label: hierarchyMode
+					? hierarchyText(
+						props.hierarchy?.showFlatLabel,
+						props.hierarchy?.showFlatLabelKey,
+						"Grid.hierarchy.showFlat",
+					)
+					: hierarchyText(
+						props.hierarchy?.showHierarchyLabel,
+						props.hierarchy?.showHierarchyLabelKey,
+						"Grid.hierarchy.showHierarchy",
+					),
+				icon: hierarchyMode
+					? props.hierarchy?.flatModeIcon ?? "pi pi-list"
+					: props.hierarchy?.hierarchyModeIcon ?? "pi pi-sitemap",
+				iconOnly: true,
+				disabled: false,
+			});
+		}
+	}
+
 	if (referenceSelectionMode.value) {
 		commands = commands.filter((command) => {
-			return command.name === "search" || command.name === "refresh";
+			return command.name === "search"
+				|| command.name === "refresh"
+				|| command.name === "toggleHierarchyView";
 		});
 	}
 
@@ -331,7 +449,16 @@ const normalizeRowClass = (
 const resolveRowClass = (row: TModel): string => {
 	const classes: string[] = [
 		...normalizeRowClass(props.getRowClass?.(row)),
+		...normalizeRowClass(hierarchy.rowClass(row)),
 	];
+
+	if (hierarchy.enabled.value) {
+		classes.push(
+			hierarchy.isGroup(row)
+				? "crud-grid-row-group"
+				: "crud-grid-row-item",
+		);
+	}
 
 	if (inlineCreateRow.value === row) {
 		classes.push("crud-grid-row-new");
@@ -346,7 +473,11 @@ const resolveRowClass = (row: TModel): string => {
 	}
 
 	if (referenceSelectionMode.value) {
-		classes.push("crud-grid-row-selectable");
+		classes.push(
+			hierarchy.enabled.value && !hierarchy.isSelectable(row)
+				? "crud-grid-row-not-selectable"
+				: "crud-grid-row-selectable",
+		);
 	}
 
 	return classes.join(" ");
@@ -355,6 +486,66 @@ const resolveRowClass = (row: TModel): string => {
 const load = async (): Promise<void> => {
 	await grid.load();
 };
+
+watch(
+	() => props.baseParams,
+	() => {
+		grid.setPage(0, grid.rowsPerPage.value);
+		grid.selectRow(null);
+		void load().catch((err: unknown) => {
+			console.error("Failed to reload collection after base params changed", err);
+		});
+	},
+	{ deep: true },
+);
+
+const hierarchyRootLabel = computed(() => {
+	return props.hierarchy?.rootLabel
+		?? t(props.hierarchy?.rootLabelKey ?? "Grid.hierarchy.root");
+});
+
+const navigateHierarchyBreadcrumb = async (displayIndex: number): Promise<void> => {
+	if (
+		inlineEditing.value
+		|| !hierarchy.enabled.value
+		|| hierarchy.viewMode.value !== "hierarchy"
+	) {
+		return;
+	}
+
+	hierarchy.goToBreadcrumb(displayIndex);
+	grid.setPage(0, grid.rowsPerPage.value);
+	grid.selectRow(null);
+	await load();
+};
+
+const onHierarchyIconClick = async (
+	event: MouseEvent,
+	row: TModel,
+): Promise<void> => {
+	if (
+		inlineEditing.value
+		|| hierarchy.viewMode.value !== "hierarchy"
+		|| !hierarchy.isGroup(row)
+	) {
+		return;
+	}
+
+	event.stopPropagation();
+	if (!hierarchy.enterGroup(row)) {
+		return;
+	}
+
+	grid.setPage(0, grid.rowsPerPage.value);
+	grid.selectRow(null);
+	await load();
+};
+
+const canSelectCurrentReferenceRow = computed(() => {
+	const row = grid.selectedRow.value;
+	return row !== null
+		&& (!hierarchy.enabled.value || hierarchy.isSelectable(row));
+});
 
 const crudEventService = computed(() => {
 	const serviceName = props.eventService ?? props.api.serviceName;
@@ -1073,8 +1264,9 @@ onBeforeUnmount(() => {
 const routeForCommand = (
 	name: string,
 	row: TModel | null,
+	createContext?: GridCreateContext,
 ) => {
-	const config = name === "create"
+	const config = name === "create" || name === "createGroup"
 		? props.routes?.create
 		: name === "copy"
 			? props.routes?.copy
@@ -1086,8 +1278,8 @@ const routeForCommand = (
 
 	if (typeof config === "function") {
 		const factory = config as (...args: any[]) => unknown;
-		if (name === "create") {
-			return factory();
+		if (name === "create" || name === "createGroup") {
+			return factory(createContext ?? {});
 		}
 
 		return row ? factory(row) : null;
@@ -1099,12 +1291,13 @@ const routeForCommand = (
 const openRoute = async (
 	name: string,
 	row: TModel | null,
+	createContext?: GridCreateContext,
 ): Promise<boolean> => {
 	if (props.editMode !== "page" && props.editMode !== "tab") {
 		return false;
 	}
 
-	const route = routeForCommand(name, row) as RouteLocationRaw | null;
+	const route = routeForCommand(name, row, createContext) as RouteLocationRaw | null;
 	if (!route) {
 		return false;
 	}
@@ -1175,10 +1368,13 @@ const discardInlineCreate = (): void => {
 	editingRows.value = editingRows.value.filter((item) => item !== row);
 	originalRows.delete(row);
 	inlineCreateRow.value = null;
+	inlineCreateContext.value = undefined;
 	restoreSelectionAfterInlineCreate();
 };
 
-const startInlineCreate = async (): Promise<boolean> => {
+const startInlineCreate = async (
+	createContext?: GridCreateContext,
+): Promise<boolean> => {
 	if (
 		props.editMode !== "inline"
 		|| !props.api.create
@@ -1189,12 +1385,16 @@ const startInlineCreate = async (): Promise<boolean> => {
 	}
 
 	grid.error.value = null;
-	const row = props.createRow();
+	const row = props.createRow(createContext);
+	if (createContext?.initialValues) {
+		Object.assign(row, createContext.initialValues);
+	}
 	inlineCreatePreviousSelection.value = {
 		row: grid.selectedRow.value,
 		columnIndex: grid.selectedCell.value?.columnIndex ?? null,
 	};
 	inlineCreateRow.value = row;
+	inlineCreateContext.value = createContext;
 	grid.rows.value = [row, ...grid.rows.value];
 	originalRows.set(row, cloneGridRow(row));
 	editingRows.value = [row];
@@ -1280,12 +1480,14 @@ const confirmDeleteRows = async (): Promise<void> => {
 const getCommandContext = (
 	name: string,
 	row: TModel | null,
+	createContext?: GridCreateContext,
 ): GridCommandContext<TModel, TKey> => {
 	const rows = getCommandTargetRows(row);
 	const keys = rows.map((item) => props.getKey(item));
 
 	return {
 		name,
+		createContext,
 		row,
 		rows,
 		keys,
@@ -1313,10 +1515,14 @@ const executeCommand = async (
 		return;
 	}
 
-	const context = getCommandContext(name, row);
+	const createContext = hierarchy.enabled.value && (name === "create" || name === "createGroup")
+		? hierarchy.createContext(name === "createGroup" ? "group" : "item")
+		: undefined;
+	const context = getCommandContext(name, row, createContext);
 
 	emit("command", {
 		name,
+		createContext,
 		row,
 		rows: context.rows,
 		keys: context.keys,
@@ -1328,6 +1534,14 @@ const executeCommand = async (
 		if (!runtimeCommand.runDefault) {
 			return;
 		}
+	}
+
+	if (name === "toggleHierarchyView") {
+		hierarchy.toggleViewMode();
+		grid.setPage(0, grid.rowsPerPage.value);
+		grid.selectRow(null);
+		await load();
+		return;
 	}
 
 	if (name === "search") {
@@ -1350,16 +1564,19 @@ const executeCommand = async (
 		return;
 	}
 
-	if (name === "create" && await startInlineCreate()) {
+	if (
+		(name === "create" || name === "createGroup")
+		&& await startInlineCreate(createContext)
+	) {
 		return;
 	}
 
-	if (await openRoute(name, row)) {
+	if (await openRoute(name, row, createContext)) {
 		return;
 	}
 
-	if (name === "create") {
-		emit("create");
+	if (name === "create" || name === "createGroup") {
+		emit("create", createContext);
 	} else if (name === "edit" && row !== null) {
 		emit("edit", row);
 	} else if (name === "copy" && row !== null) {
@@ -1402,7 +1619,18 @@ const activateRow = async (row: TModel | null): Promise<void> => {
 	grid.selectRow(row);
 	emit("selectionChange", row);
 
+	if (hierarchy.enterGroup(row)) {
+		grid.setPage(0, grid.rowsPerPage.value);
+		grid.selectRow(null);
+		await load();
+		return;
+	}
+
 	if (referenceSelectionMode.value) {
+		if (hierarchy.enabled.value && !hierarchy.isSelectable(row)) {
+			return;
+		}
+
 		returnReferenceSelection(row);
 		return;
 	}
@@ -1412,7 +1640,10 @@ const activateRow = async (row: TModel | null): Promise<void> => {
 
 const selectCurrentReferenceRow = (): void => {
 	const row = grid.selectedRow.value;
-	if (row !== null) {
+	if (
+		row !== null
+		&& (!hierarchy.enabled.value || hierarchy.isSelectable(row))
+	) {
 		returnReferenceSelection(row);
 	}
 };
@@ -1505,9 +1736,15 @@ const onRowEditSave = async (event: {
 			return;
 		}
 
-		const model = props.createModel
+		const baseModel = props.createModel
 			? props.createModel(event.newData)
 			: makeCreateModel<TModel, TNew>(event.newData, props.columns);
+		const model = inlineCreateContext.value?.initialValues
+			? {
+				...(baseModel as object),
+				...inlineCreateContext.value.initialValues,
+			} as TNew
+			: baseModel;
 
 		try {
 			const key = await props.api.create(model);
@@ -1518,6 +1755,7 @@ const onRowEditSave = async (event: {
 			});
 
 			inlineCreateRow.value = null;
+			inlineCreateContext.value = undefined;
 			inlineCreatePreviousSelection.value = null;
 			editingRows.value = [];
 			originalRows.delete(event.data);
@@ -1607,7 +1845,12 @@ defineExpose<CollectionGridExpose>({
 <template>
 	<div
 		ref="rootEl"
-		class="outline-none"
+		:class="[
+			'outline-none',
+			hierarchy.enabled.value
+				? `crud-grid-hierarchy-${hierarchy.viewMode.value}`
+				: '',
+		]"
 		tabindex="0"
 		@keydown="onRootKeydown"
 		@pointerdown.capture="onGridRootPointerDown"
@@ -1619,7 +1862,17 @@ defineExpose<CollectionGridExpose>({
 		<GridCommandPanel
 			v-if="props.showCommandPanel"
 			:commands="visibleCommands"
+			:showShortcuts="props.showCommandShortcuts"
 			@command="executeCommand"
+		/>
+
+		<CollectionBreadcrumbs
+			v-if="hierarchy.enabled.value && hierarchy.viewMode.value === 'hierarchy'"
+			:rootLabel="hierarchyRootLabel"
+			:groupIcon="hierarchy.openGroupIcon.value"
+			:path="hierarchy.path.value"
+			:disabled="inlineEditing"
+			@navigate="navigateHierarchyBreadcrumb"
 		/>
 
 		<GridSearchPanel
@@ -1640,7 +1893,7 @@ defineExpose<CollectionGridExpose>({
 				<Button
 					:label="t('Grid.selectionMode.select')"
 					icon="pi pi-check"
-					:disabled="grid.selectedRow.value === null"
+					:disabled="!canSelectCurrentReferenceRow"
 					@click="selectCurrentReferenceRow"
 				/>
 				<Button
@@ -1770,6 +2023,35 @@ defineExpose<CollectionGridExpose>({
 			</template>
 
 			<Column
+				v-if="hierarchy.enabled.value"
+				headerStyle="width: 2.75rem"
+				bodyStyle="width: 2.75rem; text-align: center"
+			>
+				<template #body="{ data, index }">
+					<div
+						:data-grid-row-index="index"
+						:class="[
+							'crud-grid-hierarchy-icon',
+							!inlineEditing && hierarchy.viewMode.value === 'hierarchy' && hierarchy.isGroup(data)
+								? 'crud-grid-hierarchy-icon--navigable'
+								: '',
+						]"
+						@click="onHierarchyIconClick($event, data)"
+					>
+						<slot
+							name="hierarchy-icon"
+							:data="data"
+							:isGroup="hierarchy.isGroup(data)"
+							:icon="hierarchy.iconForRow(data)"
+							:viewMode="hierarchy.viewMode.value"
+						>
+							<i :class="hierarchy.iconForRow(data)" />
+						</slot>
+					</div>
+				</template>
+			</Column>
+
+			<Column
 				v-for="(column, columnIndex) in props.columns"
 				:key="column.field"
 				:field="column.field"
@@ -1797,7 +2079,15 @@ defineExpose<CollectionGridExpose>({
 							:field="column.field"
 							:value="data[column.field]"
 						>
-							{{ formatGridValue(data, column) }}
+							<ReferenceKeyLabel
+								v-if="column.dataType === 'reference' && column.reference"
+								:modelValue="data[column.field]"
+								:projectedValue="column.referenceField ? data[column.referenceField] : undefined"
+								:reference="column.reference"
+							/>
+							<template v-else>
+								{{ formatGridValue(data, column) }}
+							</template>
 						</slot>
 					</div>
 				</template>
@@ -1808,24 +2098,40 @@ defineExpose<CollectionGridExpose>({
 				>
 					<slot
 						:name="`editor-${column.field}`"
-						:data="data"
+						:data="getReactiveGridEditRow(data)"
 						:field="field"
-						:value="data[field]"
+						:value="getReactiveGridEditRow(data)[field]"
+						:updateValue="(value:any) => applyGridInlineValue(data, column, value)"
 					>
+						<ReferenceKeyInput
+							v-if="column.dataType === 'reference' && column.reference"
+							v-bind="column.editorProps"
+							:modelValue="getReactiveGridEditRow(data)[field]"
+							:projectedValue="column.referenceField ? getReactiveGridEditRow(data)[column.referenceField] : undefined"
+							:reference="column.reference"
+							class="crud-grid-editor-control"
+							@update:modelValue="applyGridInlineValue(data, column, $event)"
+						/>
 						<Checkbox
-							v-if="column.dataType === 'boolean'"
-							v-model="data[field]"
+							v-else-if="column.dataType === 'boolean'"
+							v-bind="column.editorProps"
+							:modelValue="getReactiveGridEditRow(data)[field]"
 							binary
+							@update:modelValue="applyGridInlineValue(data, column, $event)"
 						/>
 						<InputNumber
 							v-else-if="column.dataType === 'number'"
-							v-model="data[field]"
+							v-bind="column.editorProps"
+							:modelValue="getReactiveGridEditRow(data)[field]"
 							class="crud-grid-editor-control"
+							@update:modelValue="applyGridInlineValue(data, column, $event)"
 						/>
 						<InputText
 							v-else
-							v-model="data[field]"
+							v-bind="column.editorProps"
+							:modelValue="getReactiveGridEditRow(data)[field]"
 							class="crud-grid-editor-control"
+							@update:modelValue="applyGridInlineValue(data, column, $event)"
 						/>
 					</slot>
 				</template>
@@ -1889,6 +2195,27 @@ defineExpose<CollectionGridExpose>({
 }
 
 :deep(.crud-grid-row-selectable) {
+	cursor: pointer;
+}
+
+:deep(.crud-grid-row-not-selectable) {
+	cursor: default;
+}
+
+:deep(.crud-grid-row-group > td) {
+	font-size: var(--crud-grid-group-font-size, 1.05em);
+	font-weight: var(--crud-grid-group-font-weight, 600);
+}
+
+.crud-grid-hierarchy-icon {
+	align-items: center;
+	display: flex;
+	justify-content: center;
+	min-height: 1.75rem;
+	padding: 0.25rem;
+}
+
+.crud-grid-hierarchy-icon--navigable {
 	cursor: pointer;
 }
 

@@ -1,4 +1,7 @@
-import { shallowRef } from "vue";
+import {
+	shallowRef,
+	toRaw,
+} from "vue";
 
 import type {
 	FormMutationField,
@@ -8,12 +11,80 @@ import type {
 } from "../../types/formMutation";
 import { isReferenceValue } from "../../utils/reference";
 
-const defaultClone = <TValue>(value: TValue): TValue => {
-	if (typeof structuredClone === "function") {
-		return structuredClone(value);
+const cloneSource = <TValue>(
+	value: TValue,
+	seen = new WeakMap<object, unknown>(),
+): TValue => {
+	if (value === null || typeof value !== "object") {
+		return value;
 	}
 
-	return JSON.parse(JSON.stringify(value)) as TValue;
+	const raw = toRaw(value as object);
+	const existing = seen.get(raw);
+	if (existing !== undefined) {
+		return existing as TValue;
+	}
+
+	if (raw instanceof Date) {
+		return new Date(raw.getTime()) as TValue;
+	}
+
+	if (raw instanceof RegExp) {
+		return new RegExp(raw.source, raw.flags) as TValue;
+	}
+
+	if (Array.isArray(raw)) {
+		const result: unknown[] = [];
+		seen.set(raw, result);
+		raw.forEach((item) => {
+			result.push(cloneSource(item, seen));
+		});
+		return result as TValue;
+	}
+
+	if (raw instanceof Map) {
+		const result = new Map<unknown, unknown>();
+		seen.set(raw, result);
+		raw.forEach((item, key) => {
+			result.set(
+				cloneSource(key, seen),
+				cloneSource(item, seen),
+			);
+		});
+		return result as TValue;
+	}
+
+	if (raw instanceof Set) {
+		const result = new Set<unknown>();
+		seen.set(raw, result);
+		raw.forEach((item) => {
+			result.add(cloneSource(item, seen));
+		});
+		return result as TValue;
+	}
+
+	const prototype = Object.getPrototypeOf(raw);
+	if (prototype !== Object.prototype && prototype !== null) {
+		return raw as TValue;
+	}
+
+	const result: Record<string, unknown> = {};
+	seen.set(raw, result);
+	Object.entries(raw as Record<string, unknown>).forEach(([key, item]) => {
+		result[key] = cloneSource(item, seen);
+	});
+
+	return result as TValue;
+};
+
+const defaultClone = <TValue>(value: TValue): TValue => {
+	const source = cloneSource(value);
+
+	if (typeof structuredClone === "function") {
+		return structuredClone(source);
+	}
+
+	return source;
 };
 
 const normalizeComparable = (value: unknown): unknown => {

@@ -6,6 +6,7 @@ import type {
 	CollectionResponse,
 } from "../types/collection";
 import type { ExportFormats } from "../types/exportFormats";
+import { validationErrorDetails } from "../utils/validation";
 
 export interface CrudHttpClient {
 	get: <T = unknown>(endpoint: string, params?: Record<string, string>) => Promise<T>;
@@ -88,6 +89,53 @@ const safeJson = (value: unknown): string => {
 		return String(value);
 	}
 };
+
+const errorMessage = (err: unknown): string => {
+	const validationDetails = validationErrorDetails(err);
+	if (validationDetails) {
+		return validationDetails;
+	}
+
+	if (err instanceof Error && err.message) {
+		return err.message;
+	}
+
+	return safeJson(err);
+};
+
+const rowIdentity = (row: unknown): string => {
+	if (!isRecord(row)) {
+		return "";
+	}
+
+	for (const field of ["id", "uuid", "code"]) {
+		const value = row[field];
+		if (typeof value === "string" || typeof value === "number") {
+			return ` (${field}: ${String(value)})`;
+		}
+	}
+
+	return "";
+};
+
+export class CollectionRowValidationError extends Error {
+	readonly rowIndex: number;
+	readonly row: unknown;
+	readonly cause: unknown;
+
+	constructor(rowIndex: number, row: unknown, cause: unknown) {
+		const rowPath = `rows[${rowIndex}]`;
+		const details = validationErrorDetails(cause, rowPath)
+			?? `${rowPath}: ${errorMessage(cause)}`;
+
+		super(`Invalid collection row ${rowIndex + 1}${rowIdentity(row)}: ${details}`);
+		this.name = "CollectionRowValidationError";
+		this.rowIndex = rowIndex;
+		this.row = row;
+		this.cause = cause;
+		Object.setPrototypeOf(this, new.target.prototype);
+	}
+}
 
 const numberFromUnknown = (value: unknown): number | null => {
 	if (typeof value === "number" && Number.isFinite(value)) {
@@ -199,7 +247,13 @@ export const createCrudApi = <
 		const collection = normalizeCollectionResponse<TListDTO>(response);
 
 		return {
-			rows: collection.rows.map(options.fromListDTO),
+			rows: collection.rows.map((row, rowIndex) => {
+				try {
+					return options.fromListDTO(row);
+				} catch (err: unknown) {
+					throw new CollectionRowValidationError(rowIndex, row, err);
+				}
+			}),
 			agg: collection.agg,
 		};
 	}

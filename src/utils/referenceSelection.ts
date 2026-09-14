@@ -1,6 +1,22 @@
 export const REFERENCE_SELECTION_QUERY_PARAM = "__vclReferenceSelect";
 export const REFERENCE_SELECTION_MESSAGE_TYPE = "vue-collection-lib:reference-selection";
 
+export const referenceSelectionTokenFromQuery = (
+	query: Readonly<Record<string, unknown>>,
+): string | null => {
+	const value = query[REFERENCE_SELECTION_QUERY_PARAM];
+
+	return typeof value === "string" && value.trim() !== ""
+		? value
+		: null;
+};
+
+export const isReferenceSelectionQuery = (
+	query: Readonly<Record<string, unknown>>,
+): boolean => {
+	return referenceSelectionTokenFromQuery(query) !== null;
+};
+
 const REFERENCE_SELECTION_CHANNEL_PREFIX = `${REFERENCE_SELECTION_MESSAGE_TYPE}:`;
 
 export interface ReferenceSelectionMessage<TRow extends object = Record<string, unknown>> {

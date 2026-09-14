@@ -105,6 +105,29 @@ const createModel = (row: ProductRow): ProductNew => ({
 
 `createRow` should populate key fields with a safe temporary value (for example `id: 0` or a negative ID), because the grid may call `getKey()` while the draft is selected. Only one inline edit/create session is active at a time. While it is active, collection commands, sorting, paging, context commands, keyboard shortcuts, and WebSocket auto-refresh are suspended. Cancel removes a new draft without calling the API; save calls `api.create()`, emits `rowCreate`, and reloads the collection. If `createRow` is omitted, the create command keeps its previous route/`create` event behavior.
 
+## Inline edit reactivity
+
+`CollectionGrid` guarantees that every row draft exposed to an inline editor is reactive, even though PrimeVue creates the underlying edit-row clone as a plain object. All built-in editors use one write path, `applyGridInlineValue()`: it optionally normalizes the raw editor value, assigns the edited field, then invokes the optional `GridColumn.setValue` hook on the same reactive draft.
+
+Use `normalizeValue` for field-local conversion and keep cross-field business rules in `setValue` instead of repeating assignment or adding form-specific reactivity workarounds:
+
+```ts
+const columns: GridColumn<ReceiptItem>[] = [
+	{
+		field: "price",
+		headerKey: "ReceiptItem.fields.price",
+		editable: true,
+		dataType: "number",
+		normalizeValue: (value) => Math.round(Number(value ?? 0) * 100) / 100,
+		setValue: (row) => {
+			row.amount = row.quant * row.price;
+		},
+	},
+];
+```
+
+The same guarantee applies to custom editor slots: `data` is the reactive edit draft and `updateValue(value)` uses the same common write path as the built-in editors. Prefer `updateValue()` over assigning the edited field directly. Do not call `reactive()` in application grids just to support dependent fields.
+
 ## Search
 
 `CollectionGrid` includes a built-in `search` command. If a grid uses `commandsMode="replace"`, add the command explicitly:
@@ -246,3 +269,31 @@ const productApi = createCrudApi({
 ```
 
 Use `eventService` on `CollectionGrid` to override the API metadata, `autoRefreshOnCrud` to disable event refresh, and `eventRefreshDelay` to change the debounce delay.
+
+## Hierarchical collections
+
+`CollectionGrid` can optionally interpret a collection as a hierarchy. The default contract is `parent_id`, `is_group`, `id` (from `dataKey`), and `name` (breadcrumb label):
+
+```vue
+<CollectionGrid
+	:api="productApi"
+	:columns="columns"
+	dataKey="id"
+	:getKey="getKey"
+	:hierarchy="{}"
+/>
+```
+
+Hierarchy mode scopes the server request through `CollectionParams`:
+
+- root: `parent_id IS NULL`;
+- group: `parent_id = currentGroupId`;
+- flat mode: no hierarchy filter.
+
+Search criteria remain independent and are appended to the base hierarchy filters. This lets the same search become current-group search in hierarchy mode and global search in flat mode.
+
+The toolbar automatically adds Create group and an icon-only hierarchy/flat switch. Breadcrumbs appear directly below the toolbar in hierarchy mode. The current hierarchy path survives flat mode and is restored when hierarchy mode is selected again.
+
+Inline creation receives structural initial values through `GridCreateContext` and forcibly merges them into the create payload. Page/tab create routes can accept the same context from `GridRouteConfig.create`.
+
+Default reference-picker eligibility is elements only. Configure `hierarchy.selectable` when groups are valid reference values.

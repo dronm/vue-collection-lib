@@ -7,6 +7,7 @@ The package provides a server-driven CRUD grid, reference/autocomplete input, fo
 ## Features
 
 - PrimeVue `DataTable` CRUD grid with lazy pagination and server sorting;
+- optional server-driven hierarchical collections with group navigation, breadcrumbs, and flat/global-search mode;
 - built-in create, edit, copy, delete, search, and refresh commands;
 - keyboard shortcuts, row marking, cell cursor, context menu, and persisted grid state;
 - string, number, boolean, date, range, and reference search criteria;
@@ -16,6 +17,7 @@ The package provides a server-driven CRUD grid, reference/autocomplete input, fo
 - create/update payload generation with changed fields only;
 - reference-to-key payload mapping;
 - Valibot validation and normalized API/field errors;
+- collection schema errors include the failing row, row identity, and nested field path;
 - dirty-form route guard;
 - typed HTTP and CRUD API helpers;
 - English and Russian translations.
@@ -247,6 +249,84 @@ When inline row editing is active, collection-level keyboard routing is suspende
 
 Pressing `Enter` on the grid activates the current row exactly like a double-click. Normally this runs the edit action. A collection opened from a `ReferenceInput` select action is automatically switched into selection mode instead: it shows a picker banner, suppresses mutating commands, and returns the selected row to the originating reference input on `Enter` or double-click.
 
+### Hierarchical collections
+
+Set `hierarchy` on `CollectionGrid` or `CollectionDefinition` to enable folder-style navigation. The zero-configuration data contract uses these fields:
+
+```ts
+interface ProductRow {
+	id: number;
+	name: string;
+	parent_id: number | null;
+	is_group: boolean;
+}
+```
+
+```ts
+const productCollection = defineCollection({
+	titleKey: "Product.title",
+	api: productApi,
+	columns,
+	dataKey: "id",
+	getKey: (row: ProductRow) => ({ id: row.id }),
+	hierarchy: {},
+});
+```
+
+Hierarchy mode adds `parent_id IS NULL` at the root and `parent_id = currentGroupId` after entering a group. These are base filters, not search criteria, so they are not shown as removable search chips. User search filters are merged after the hierarchy filter.
+
+Groups are placed first by default by adding a fixed `is_group DESC` sorter before the user's sorters. Set `groupsFirst: false` to disable this behavior.
+
+The command panel receives a hierarchy/flat icon switch. In flat mode the hierarchy filter is removed, breadcrumbs are hidden, and searching covers all groups and elements. Switching back restores the previously selected group path. The view mode and breadcrumb path are persisted per `stateKey` in session storage.
+
+Group rows use a folder icon, element rows use a file icon, and the current breadcrumb uses an open-folder icon. Double-click/Enter on a group, or a click on its folder icon, enters that group. The explicit Edit command still edits the group itself. In flat mode groups are normal, non-navigable rows.
+
+The defaults can be overridden when a model uses other field names or presentation rules:
+
+```ts
+hierarchy: {
+	parentField: "parent_id",
+	groupField: "is_group",
+	idField: "id",
+	labelField: "name",
+	defaultViewMode: "hierarchy",
+	allowFlatView: true,
+	groupsFirst: true,
+	groupIcon: "pi pi-folder",
+	openGroupIcon: "pi pi-folder-open",
+	flatGroupIcon: "pi pi-folder",
+	itemIcon: "pi pi-file",
+	groupRowClass: "product-group-row",
+},
+```
+
+The default group typography can be changed through inherited CSS variables:
+
+```css
+.products-grid {
+	--crud-grid-group-font-size: 1.1em;
+	--crud-grid-group-font-weight: 700;
+}
+```
+
+Hierarchical inline creation initializes and always submits `parent_id` and `is_group`, even when those fields are not editable columns. The standard Create command creates an element; Create group creates a group. In flat mode new records are created at the root because there is no visible current group.
+
+For page/tab edit mode, make the create route a factory when the form needs the structural values:
+
+```ts
+const routes: GridRouteConfig<ProductRow> = {
+	create: (context) => ({
+		name: "ProductCreate",
+		query: {
+			parent_id: context.initialValues?.parent_id as number | null,
+			is_group: context.initialValues?.is_group ? "1" : "0",
+		},
+	}),
+};
+```
+
+Reference pickers default to selecting elements only. Set `selectable: "groups"`, `selectable: "all"`, or provide a predicate for other cases. In hierarchy mode a group still opens on Enter/double-click; use the explicit Select button when the reference itself accepts groups.
+
 ```vue
 <script setup lang="ts">
 import {
@@ -408,6 +488,33 @@ Body, editor, and footer slots are named from the field:
 	</template>
 </CollectionGrid>
 ```
+
+## Declarative references and lightweight forms
+
+For forms that store a scalar foreign key, keep the key as the model source of truth instead of maintaining a parallel `*_ref` field. `defineCrudReference()` packages autocomplete, detail lookup, caching, fallback display, and open/select routes, while `ReferenceKeyInput` and `ReferenceKeyLabel` convert between the scalar key and `ReferenceValue` internally.
+
+```ts
+export const categoryReference = defineCrudReference({
+	list: categoryApi.list,
+	detail: categoryApi.detail,
+	keyField: "id",
+	searchField: "name",
+	descrFields: ["name"],
+});
+```
+
+```vue
+<ReferenceKeyInput
+	v-model="form.category_id"
+	:reference="categoryReference"
+/>
+```
+
+`CollectionForm`, `FormField`, `CollectionEditPage`, `useCollectionFormModel()`, and `useCollectionEditPage()` provide the repeated form/page lifecycle without replacing Vue templates with a metadata layout language. `defineCollection()` plus `CollectionListPage` provides the equivalent lightweight wrapper for ordinary lists.
+
+For document detail grids, `useChildCollection()` owns the parent filter, next line number, temporary negative keys, and inline create plumbing. Reference columns can be declared with `dataType: "reference"` plus a reference definition; built-in numeric editors accept `editorProps`, and `setValue` keeps domain calculations in application code.
+
+Inline editor drafts are always exposed as reactive rows. Every built-in editor writes through `applyGridInlineValue()`, which applies optional `normalizeValue`, assigns the edited field, and then invokes `setValue`. A `setValue` callback therefore normally contains only dependent-field logic (for example `quant × price → amount` or `material → measure unit`). Custom `editor-*` slots receive the same reactive row through `data` and the same write function through `updateValue(value)`.
 
 ## ReferenceInput
 

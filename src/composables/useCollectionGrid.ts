@@ -36,6 +36,7 @@ interface UseCollectionGridOptions<
 	getKey: (row: TModel) => TKey;
 	stateKey?: string;
 	initialParams?: CollectionParams;
+	baseParams?: Ref<CollectionParams | undefined>;
 	defaultSorter?: CollectionSorter[];
 	pageSize?: number;
 	rowSelection?: boolean;
@@ -67,6 +68,31 @@ const hasSorter = (
 	sorter: CollectionSorter[] | undefined,
 ): sorter is CollectionSorter[] => {
 	return Array.isArray(sorter) && sorter.length > 0;
+};
+
+const mergeSorter = (
+	fixedSorter: CollectionSorter[] | undefined,
+	userSorter: CollectionSorter[] | undefined,
+): CollectionSorter[] => {
+	const result: CollectionSorter[] = [];
+	const fixedFields = new Set<string>();
+
+	for (const item of fixedSorter ?? []) {
+		if (fixedFields.has(item.f)) {
+			continue;
+		}
+
+		result.push({ ...item });
+		fixedFields.add(item.f);
+	}
+
+	for (const item of userSorter ?? []) {
+		if (!fixedFields.has(item.f)) {
+			result.push({ ...item });
+		}
+	}
+
+	return result;
 };
 
 export const useCollectionGrid = <
@@ -108,15 +134,21 @@ export const useCollectionGrid = <
 		});
 		const filter = [
 			...(options.initialParams?.filter ?? []),
+			...(options.baseParams?.value?.filter ?? []),
 			...searchFilters,
 		];
+		const effectiveSorter = mergeSorter(
+			options.baseParams?.value?.sorter,
+			sorter.value,
+		);
 
 		return {
 			...options.initialParams,
+			...options.baseParams?.value,
 			from: first.value,
 			count: rowsPerPage.value,
 			filter: filter.length > 0 ? filter : undefined,
-			sorter: sorter.value.length > 0 ? sorter.value : undefined,
+			sorter: effectiveSorter.length > 0 ? effectiveSorter : undefined,
 		};
 	});
 

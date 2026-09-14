@@ -63,9 +63,22 @@ export const buildSearchColumnOptions = <TModel extends object>(
 				dataType,
 				operations: column.searchOperations ?? searchOperationsForType(dataType),
 				referenceKeys: column.searchReferenceKeys,
-				referenceAutocomplete: column.searchReferenceAutocomplete,
-				referenceOpenAction: column.searchReferenceOpenAction,
-				referenceSelectAction: column.searchReferenceSelectAction,
+				referenceAutocomplete: column.searchReferenceAutocomplete
+					?? column.reference?.autocomplete,
+				referenceOpenAction: column.searchReferenceOpenAction
+					?? (column.reference?.openRoute
+						? {
+							route: column.reference.openRoute,
+							target: column.reference.openTarget,
+						}
+						: undefined),
+				referenceSelectAction: column.searchReferenceSelectAction
+					?? (column.reference?.selectRoute
+						? {
+							route: column.reference.selectRoute,
+							target: column.reference.selectTarget,
+						}
+						: undefined),
 				searchComponent: column.searchComponent,
 				searchComponentProps: column.searchComponentProps,
 				searchDateOnly: column.searchDateOnly,

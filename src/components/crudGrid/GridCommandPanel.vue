@@ -5,19 +5,22 @@ import type { GridCommandRuntime } from "./types";
 
 type GridCommandPanelItem = Pick<
 	GridCommandRuntime<any>,
-	"name" | "label" | "icon" | "picture" | "shortcut" | "disabled" | "severity"
+	"name" | "label" | "icon" | "picture" | "iconOnly" | "shortcut" | "disabled" | "severity"
 >;
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
 	commands: GridCommandPanelItem[];
-}>();
+	showShortcuts?: boolean;
+}>(), {
+	showShortcuts: true,
+});
 
 const emit = defineEmits<{
 	command: [name: string];
 }>();
 
 const buttonLabel = (command: GridCommandPanelItem): string => {
-	return command.shortcut
+	return props.showShortcuts && command.shortcut
 		? `${command.label} (${command.shortcut})`
 		: command.label;
 };
@@ -29,7 +32,9 @@ const buttonLabel = (command: GridCommandPanelItem): string => {
 			v-for="command in props.commands"
 			:key="command.name"
 			:icon="command.icon ?? command.picture"
-			:label="buttonLabel(command)"
+			:label="command.iconOnly ? undefined : buttonLabel(command)"
+			:title="command.iconOnly ? buttonLabel(command) : undefined"
+			:aria-label="command.iconOnly ? buttonLabel(command) : undefined"
 			:disabled="command.disabled"
 			:severity="command.severity"
 			outlined

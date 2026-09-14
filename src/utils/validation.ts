@@ -58,6 +58,33 @@ const issueField = (issue: ValidationIssueLike): string | null => {
 	return parts.length > 0 ? parts.join(".") : null;
 };
 
+export const validationIssuesText = (
+	issues: readonly unknown[],
+	prefix = "",
+): string => {
+	return issues.map((rawIssue) => {
+		const issue = rawIssue as ValidationIssueLike;
+		const field = issueField(issue);
+		const path = prefix && field
+			? `${prefix}.${field}`
+			: prefix || field || "";
+		const message = stringMessage(issue.message);
+
+		return path ? `${path}: ${message}` : message;
+	}).join("; ");
+};
+
+export const validationErrorDetails = (
+	err: unknown,
+	prefix = "",
+): string | null => {
+	if (!isRecord(err) || !Array.isArray(err.issues) || err.issues.length === 0) {
+		return null;
+	}
+
+	return validationIssuesText(err.issues, prefix);
+};
+
 const normalizeFieldMessages = (value: unknown): string[] => {
 	if (Array.isArray(value)) {
 		return value.map(stringMessage);

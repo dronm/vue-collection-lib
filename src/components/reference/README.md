@@ -82,3 +82,26 @@ In selection mode:
 - the picker tab closes after selection.
 
 `selectAction` values that do not target `_blank` keep their normal navigation behavior.
+
+### Hiding the application shell in picker windows
+
+The library exports `useReferenceSelectionMode()` so the host application's shell can
+hide navigation and remove layout offsets while a collection is being used as a picker:
+
+```vue
+<script setup lang="ts">
+import { useReferenceSelectionMode } from "@katren/vue-collection-lib";
+
+const referenceSelectionMode = useReferenceSelectionMode();
+</script>
+
+<template>
+	<AppMenu v-if="!referenceSelectionMode" />
+
+	<main :class="{ 'lg:pl-64': !referenceSelectionMode }">
+		<router-view />
+	</main>
+</template>
+```
+
+Collection pages themselves do not need any special handling.

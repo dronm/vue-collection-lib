@@ -1,4 +1,6 @@
+export { default as CollectionListPage } from "./CollectionListPage.vue";
 export { default as CollectionGrid } from "./CollectionGrid.vue";
+export { default as CollectionBreadcrumbs } from "./CollectionBreadcrumbs.vue";
 export { default as GridCommandPanel } from "./GridCommandPanel.vue";
 export { default as GridSearchDialog } from "./GridSearchDialog.vue";
 export { default as GridSearchPanel } from "./GridSearchPanel.vue";
@@ -6,3 +8,4 @@ export * from "./gridSearchUtils";
 export * from "./gridUtils";
 export * from "./state";
 export * from "./types";
+export { applyGridInlineValue, getReactiveGridEditRow } from "./inlineEditing";

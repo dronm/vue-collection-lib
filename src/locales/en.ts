@@ -20,6 +20,13 @@ const en = {
 			select: "Select",
 			cancel: "Cancel",
 		},
+		hierarchy: {
+			root: "Root",
+			createItem: "Create item",
+			createGroup: "Create group",
+			showFlat: "Show all records",
+			showHierarchy: "Show hierarchy",
+		},
 		editModes: {
 			inline: "Inline",
 			modal: "Modal",

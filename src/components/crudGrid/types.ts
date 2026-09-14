@@ -6,6 +6,8 @@ import type {
 	CollectionResponse,
 	CollectionSorter,
 } from "../../types/collection";
+import type { CrudReferenceDefinition } from "../../types/referenceDefinition";
+import type { CollectionHierarchyConfig } from "../../types/collectionHierarchy";
 import type {
 	ReferenceAutocompleteConfig,
 	ReferenceKeys,
@@ -21,6 +23,11 @@ export type GridCellDataType = "string" | "number" | "boolean" | "date" | "refer
 export type GridSearchDataType = GridCellDataType;
 export type GridSearchOperation = "begins" | "contains" | "exact" | "range";
 export type GridSearchSingleValue = string | number | boolean | Date | ReferenceValue | null;
+
+export interface GridCreateContext {
+	kind?: "item" | "group";
+	initialValues?: Record<string, unknown>;
+}
 
 export interface GridSearchRangeValue {
 	from: GridSearchSingleValue;
@@ -83,6 +90,26 @@ export interface GridColumn<TModel extends object> {
 	sortField?: string;
 	editable?: boolean;
 	dataType?: GridCellDataType;
+	/** Props forwarded to the built-in inline editor component. */
+	editorProps?: Record<string, unknown>;
+	/**
+	 * Normalizes a raw inline-editor value before it is assigned to the row.
+	 * Useful for null handling, rounding, trimming, and similar field-local rules.
+	 */
+	normalizeValue?: (value: unknown, row: TModel) => unknown;
+	/**
+	 * Runs after the common inline-edit path assigns the edited field.
+	 *
+	 * The row is the reactive inline-edit draft. The normalized field value
+	 * is already present when this hook runs, so it normally only contains
+	 * dependent-field business logic. Mutating sibling fields immediately
+	 * updates their editors. Async hooks are supported.
+	 */
+	setValue?: (row: TModel, value: unknown) => void | Promise<void>;
+	/** Reference definition used by built-in reference body/editor rendering. */
+	reference?: CrudReferenceDefinition<any, any, any>;
+	/** Sibling read-projection field containing { keys, descr }. Never submitted. */
+	referenceField?: keyof TModel & string;
 	searchable?: boolean;
 	searchField?: string;
 	searchDataType?: GridSearchDataType;
@@ -164,6 +191,7 @@ export interface GridSearchCriterion {
 
 export interface GridCommandContext<TModel extends object, TKey = unknown> {
 	name: GridCommandName;
+	createContext?: GridCreateContext;
 	row: TModel | null;
 	rows: TModel[];
 	keys: TKey[];
@@ -188,6 +216,7 @@ export interface GridCommand<
 	label?: string;
 	icon?: string;
 	picture?: string;
+	iconOnly?: boolean;
 	shortcut?: string;
 	severity?: "secondary" | "success" | "info" | "warn" | "danger" | "contrast";
 	visible?: boolean | ((row: TModel | null) => boolean);
@@ -216,10 +245,12 @@ export interface GridCellPosition<TModel extends object> {
 }
 
 export interface GridRouteConfig<TModel extends object> {
-	create?: RouteLocationRaw | (() => RouteLocationRaw);
+	create?: RouteLocationRaw | ((context: GridCreateContext) => RouteLocationRaw);
 	edit?: RouteLocationRaw | ((row: TModel) => RouteLocationRaw);
 	copy?: RouteLocationRaw | ((row: TModel) => RouteLocationRaw);
 }
+
+export type GridHierarchyConfig<TModel extends object> = CollectionHierarchyConfig<TModel>;
 
 export interface SavedGridState {
 	version: number;
@@ -238,6 +269,7 @@ export interface SavedGridState {
 
 export interface GridCommandEvent<TModel extends object, TKey = unknown> {
 	name: GridCommandName;
+	createContext?: GridCreateContext;
 	row: TModel | null;
 	rows: TModel[];
 	keys: TKey[];

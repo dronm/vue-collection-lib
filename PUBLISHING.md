@@ -2,7 +2,7 @@
 
 ## Account preparation
 
-The npm account or organization must own the `@dronm` scope, and the publishing user must have permission to create or update the package.
+The npm account or organization must own the `@katren` scope, and the publishing user must have permission to create or update the package.
 
 Direct npm publishing requires either:
 
@@ -49,7 +49,7 @@ npm pack
 Install that tarball in a test application:
 
 ```bash
-npm install /absolute/path/to/dronm-vue-collection-lib-<version>.tgz
+npm install /absolute/path/to/katren-vue-collection-lib-<version>.tgz
 npm run build
 ```
 
@@ -57,7 +57,7 @@ Delete the generated `.tgz` after testing if it must not be committed.
 
 ## Choose a version
 
-A published npm version is immutable and cannot be published again. The package in this archive is version `0.1.7`; bump it before publishing when that version already exists. Check the current registry version:
+A published npm version is immutable and cannot be published again. The package in this archive is version `0.1.9`; bump it before publishing when that version already exists. Check the current registry version:
 
 ```bash
 npm view @katren/vue-collection-lib version

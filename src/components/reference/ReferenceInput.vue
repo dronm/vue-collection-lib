@@ -342,6 +342,7 @@ const clearValue = (): void => {
 			:class="{ 'crud-reference-input-controls--with-actions': hasActionButtons }"
 		>
 			<AutoComplete
+				fluid
 				:inputId="props.id"
 				:modelValue="props.modelValue"
 				:suggestions="suggestions"
@@ -350,6 +351,7 @@ const clearValue = (): void => {
 				inputClass="crud-reference-input-autocomplete-input"
 				:placeholder="props.placeholder"
 				:disabled="props.disabled"
+				:required="props.required"
 				:invalid="inputInvalid"
 				:loading="loading"
 				:delay="props.autocomplete.delay ?? 250"
@@ -427,35 +429,24 @@ const clearValue = (): void => {
 .crud-reference-input-controls {
 	align-items: stretch;
 	display: flex;
-	gap: 0;
 	min-width: 0;
 	width: 100%;
 }
 
 :deep(.crud-reference-input-autocomplete) {
-	display: flex;
-	flex: 1 1 auto;
+	flex: 1 1 0%;
 	min-width: 0;
-	width: 100%;
+	width: 0;
 }
 
-:deep(.crud-reference-input-autocomplete input),
+:deep(.crud-reference-input-autocomplete .p-autocomplete-input),
 :deep(.crud-reference-input-autocomplete-input) {
 	min-width: 0;
 	width: 100%;
 }
 
-.crud-reference-input-action {
-	flex: 0 0 auto;
-}
-
-.crud-reference-input-error {
-	color: var(--p-red-600, rgb(220 38 38));
-}
-
-.crud-reference-input-controls--with-actions
-	:deep(.crud-reference-input-autocomplete input),
-.crud-reference-input-action {
+.crud-reference-input-action,
+:deep(.crud-reference-input-action.p-button) {
 	flex: 0 0 auto;
 }
 
@@ -471,7 +462,6 @@ const clearValue = (): void => {
 
 :deep(.crud-reference-input-action.p-button) {
 	border-radius: 0;
-	flex: 0 0 auto;
 	margin-left: -1px;
 }
 

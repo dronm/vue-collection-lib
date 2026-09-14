@@ -20,6 +20,13 @@ const ru = {
 			select: "Выбрать",
 			cancel: "Отмена",
 		},
+		hierarchy: {
+			root: "Корень",
+			createItem: "Создать элемент",
+			createGroup: "Создать группу",
+			showFlat: "Показать все записи",
+			showHierarchy: "Показать иерархию",
+		},
 		editModes: {
 			inline: "В строке",
 			modal: "Модально",
