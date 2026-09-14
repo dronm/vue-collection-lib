@@ -52,6 +52,10 @@ import {
 	getReactiveGridEditRow,
 } from "./inlineEditing";
 import {
+	deleteRowsSequentially,
+	type SequentialDeleteResult,
+} from "./deleteRows";
+import {
 	cloneGridRow,
 	formatGridValue,
 	makeChangedModel,
@@ -183,6 +187,7 @@ const CONTEXT_MENU_CLOSE_GUARD_MS = 250;
 const deleteConfirmVisible = ref(false);
 const deletePendingRows = ref<TModel[]>([]);
 const deleteRunning = ref(false);
+const deleteError = ref<string | null>(null);
 
 const contextMenuStyle = computed(() => {
 	return {
@@ -384,11 +389,23 @@ const visibleCommands = computed(() => {
 		}));
 	}
 
+	if (deleteRunning.value) {
+		commands = commands.map((command) => ({
+			...command,
+			disabled: true,
+		}));
+	}
+
 	return commands;
 });
 
 const buildContextMenuItems = (row: TModel | null): ContextMenuItem[] => {
-	if (!props.showContextMenu || referenceSelectionMode.value || inlineEditing.value) {
+	if (
+		!props.showContextMenu
+		|| referenceSelectionMode.value
+		|| inlineEditing.value
+		|| deleteRunning.value
+	) {
 		return [];
 	}
 
@@ -1418,9 +1435,44 @@ const getCommandTargetRows = (row: TModel | null): TModel[] => {
 	return row === null ? [] : [row];
 };
 
-const deleteRowsImmediately = async (rows: TModel[]): Promise<void> => {
-	if (rows.length === 0) {
+const removeDeletedRowsLocally = (rows: TModel[]): void => {
+	const deletedKeys = new Set(
+		rows.map((row) => JSON.stringify(props.getKey(row))),
+	);
+	const previousCount = grid.rows.value.length;
+	grid.rows.value = grid.rows.value.filter((row) => {
+		return !deletedKeys.has(JSON.stringify(props.getKey(row)));
+	});
+	const removedCount = previousCount - grid.rows.value.length;
+	grid.totalRecords.value = Math.max(0, grid.totalRecords.value - removedCount);
+
+	const selectedRow = grid.selectedRow.value;
+	if (selectedRow === null) {
 		return;
+	}
+
+	if (deletedKeys.has(JSON.stringify(props.getKey(selectedRow)))) {
+		grid.selectRow(null);
+		return;
+	}
+
+	const selectedCell = grid.selectedCell.value;
+	const rowIndex = grid.rows.value.indexOf(selectedRow);
+	if (rowIndex < 0) {
+		grid.selectRow(null);
+	} else if (selectedCell !== null) {
+		grid.selectCell(selectedRow, rowIndex, selectedCell.columnIndex);
+	}
+};
+
+const deleteRowsImmediately = async (
+	rows: TModel[],
+): Promise<SequentialDeleteResult> => {
+	if (rows.length === 0) {
+		return {
+			succeeded: true,
+			deletedCount: 0,
+		};
 	}
 
 	const keys = rows.map((item) => props.getKey(item));
@@ -1430,29 +1482,69 @@ const deleteRowsImmediately = async (rows: TModel[]): Promise<void> => {
 	});
 
 	if (!props.autoDelete || !props.api.delete) {
-		return;
+		return {
+			succeeded: true,
+			deletedCount: 0,
+		};
 	}
 
 	deleteRunning.value = true;
+	deleteError.value = null;
+	grid.error.value = null;
 	try {
-		for (const key of keys) {
-			await props.api.delete(key);
+		const result = await deleteRowsSequentially(
+			keys,
+			(key) => props.api.delete!(key),
+		);
+		let reloadError: string | null = null;
+
+		if (result.deletedCount > 0) {
+			grid.clearMarkedRows();
+			removeDeletedRowsLocally(rows.slice(0, result.deletedCount));
+			try {
+				await load();
+			} catch (error: unknown) {
+				reloadError = errorText(error);
+			}
 		}
 
-		grid.clearMarkedRows();
-		await load();
+		if (!result.succeeded) {
+			const reason = errorText(result.error);
+			const message = result.deletedCount > 0
+				? `${t("Grid.deletePartialFailure", {
+					count: result.deletedCount,
+				})} ${reason}`
+				: reason;
+			const completeMessage = reloadError === null
+				? message
+				: `${message} ${t("Grid.deleteReloadFailure", {
+					error: reloadError,
+				})}`;
+			if (deleteConfirmVisible.value) {
+				deleteError.value = completeMessage;
+			} else {
+				grid.error.value = completeMessage;
+			}
+		}
+
+		return result;
 	} finally {
 		deleteRunning.value = false;
 	}
 };
 
 const deleteRows = async (row: TModel | null): Promise<void> => {
+	if (deleteRunning.value) {
+		return;
+	}
+
 	const rows = getCommandTargetRows(row);
 	if (rows.length === 0) {
 		return;
 	}
 
 	if (props.autoDelete && props.api.delete && props.confirmDelete) {
+		deleteError.value = null;
 		deletePendingRows.value = rows;
 		deleteConfirmVisible.value = true;
 		return;
@@ -1461,20 +1553,35 @@ const deleteRows = async (row: TModel | null): Promise<void> => {
 	await deleteRowsImmediately(rows);
 };
 
+const resetDeleteDialog = (): void => {
+	deletePendingRows.value = [];
+	deleteError.value = null;
+};
+
 const cancelDelete = (): void => {
 	if (deleteRunning.value) {
 		return;
 	}
 
 	deleteConfirmVisible.value = false;
-	deletePendingRows.value = [];
+	resetDeleteDialog();
 };
 
 const confirmDeleteRows = async (): Promise<void> => {
+	if (deleteRunning.value) {
+		return;
+	}
+
 	const rows = [...deletePendingRows.value] as TModel[];
-	await deleteRowsImmediately(rows);
+	deleteError.value = null;
+	const result = await deleteRowsImmediately(rows);
+	if (!result.succeeded) {
+		deletePendingRows.value = rows.slice(result.deletedCount);
+		return;
+	}
+
 	deleteConfirmVisible.value = false;
-	deletePendingRows.value = [];
+	resetDeleteDialog();
 };
 
 const getCommandContext = (
@@ -1508,6 +1615,10 @@ const executeCommand = async (
 	name: string,
 	command?: GridCommandRuntime<TModel, TKey>,
 ): Promise<void> => {
+	if (deleteRunning.value) {
+		return;
+	}
+
 	const row = grid.selectedRow.value;
 	const runtimeCommand = command ?? findVisibleCommand(name);
 
@@ -1909,6 +2020,7 @@ defineExpose<CollectionGridExpose>({
 		<div
 			v-if="grid.error.value"
 			class="crud-grid-error"
+			role="alert"
 		>
 			{{ grid.error.value }}
 		</div>
@@ -1926,11 +2038,21 @@ defineExpose<CollectionGridExpose>({
 			v-model:visible="deleteConfirmVisible"
 			:header="t('Grid.deleteConfirmTitle')"
 			:style="{ width: '28rem' }"
+			:closable="!deleteRunning"
+			:closeOnEscape="!deleteRunning"
 			modal
+			@hide="resetDeleteDialog"
 		>
 			<p class="crud-grid-confirm-message">
 				{{ t("Grid.deleteConfirm", { count: deletePendingRows.length }) }}
 			</p>
+			<div
+				v-if="deleteError"
+				class="crud-grid-error crud-grid-delete-error"
+				role="alert"
+			>
+				{{ deleteError }}
+			</div>
 
 			<template #footer>
 				<div class="crud-grid-confirm-actions">
@@ -1942,7 +2064,8 @@ defineExpose<CollectionGridExpose>({
 						@click="cancelDelete"
 					/>
 					<Button
-						:label="t('Grid.commands.delete')"
+						:label="t(deleteError ? 'Grid.commands.retry' : 'Grid.commands.delete')"
+						:disabled="deleteRunning"
 						:loading="deleteRunning"
 						icon="pi pi-trash"
 						severity="danger"
@@ -2234,6 +2357,11 @@ defineExpose<CollectionGridExpose>({
 	font-size: 0.875rem;
 	line-height: 1.5rem;
 	margin: 0;
+}
+
+.crud-grid-delete-error {
+	margin-bottom: 0;
+	margin-top: 0.75rem;
 }
 
 .crud-grid-confirm-actions {

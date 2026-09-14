@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { isProxy, isReactive, nextTick, watchEffect } from "vue";
 
-import { Conn } from "../src/api/Conn.ts";
+import { APIError, Conn } from "../src/api/Conn.ts";
 import {
 	buildCollectionQuery,
 	CollectionRowValidationError,
@@ -14,6 +14,7 @@ import {
 import * as v from "valibot";
 import { transformJSON } from "../src/api/transformJSON.ts";
 import { makeCreateModel } from "../src/components/crudGrid/gridUtils.ts";
+import { deleteRowsSequentially } from "../src/components/crudGrid/deleteRows.ts";
 import {
 	applyGridInlineValue,
 	getReactiveGridEditRow,
@@ -21,6 +22,7 @@ import {
 import type { GridColumn } from "../src/components/crudGrid/types.ts";
 import { useCollectionFormSubmit } from "../src/composables/form/useCollectionFormSubmit.ts";
 import { useFormMutation } from "../src/composables/form/useFormMutation.ts";
+import { errorText } from "../src/utils/errorText.ts";
 import {
 	createReferenceSelectionToken,
 	isReferenceSelectionMessage,
@@ -40,6 +42,70 @@ test("normalizes collection totals", () => {
 
 	assert.equal(result.agg.tot_count, 12);
 	assert.deepEqual(result.rows, [{ id: 1 }]);
+});
+
+test("keeps the public API message for a restricted delete", () => {
+	const message = "Невозможно удалить запись: она используется в других данных.";
+	const error = new APIError("request error", 409, {
+		error: {
+			code: "record_in_use",
+			message,
+		},
+	});
+
+	assert.equal(errorText(error), message);
+});
+
+test("deletes every requested key sequentially", async () => {
+	const deletedKeys: number[] = [];
+	const result = await deleteRowsSequentially([11, 12, 13], async (key) => {
+		deletedKeys.push(key);
+	});
+
+	assert.deepEqual(deletedKeys, [11, 12, 13]);
+	assert.deepEqual(result, {
+		succeeded: true,
+		deletedCount: 3,
+	});
+});
+
+test("stops a delete batch and reports its partial progress", async () => {
+	const deletedKeys: number[] = [];
+	const failure = new Error("record is in use");
+	const result = await deleteRowsSequentially([21, 22, 23], async (key) => {
+		deletedKeys.push(key);
+		if (key === 22) {
+			throw failure;
+		}
+	});
+
+	assert.deepEqual(deletedKeys, [21, 22]);
+	assert.equal(result.succeeded, false);
+	assert.equal(result.deletedCount, 1);
+	if (!result.succeeded) {
+		assert.equal(result.error, failure);
+
+		const remainingKeys = [21, 22, 23].slice(result.deletedCount);
+		const retriedKeys: number[] = [];
+		await deleteRowsSequentially(remainingKeys, async (key) => {
+			retriedKeys.push(key);
+		});
+
+		assert.deepEqual(retriedKeys, [22, 23]);
+	}
+});
+
+test("keeps the complete batch pending when its first delete fails", async () => {
+	const attemptedKeys: number[] = [];
+	const result = await deleteRowsSequentially([31, 32], async (key) => {
+		attemptedKeys.push(key);
+		throw new Error("delete failed");
+	});
+
+	assert.deepEqual(attemptedKeys, [31]);
+	assert.equal(result.succeeded, false);
+	assert.equal(result.deletedCount, 0);
+	assert.deepEqual([31, 32].slice(result.deletedCount), [31, 32]);
 });
 
 test("reports the collection row and field that failed schema validation", async () => {
@@ -522,4 +588,17 @@ test("CollectionGrid wires inline editors through the reactive draft contract", 
 		source,
 		/@update:modelValue="applyGridInlineValue\(data, column, \$event\)"/,
 	);
+});
+
+test("CollectionGrid renders delete failures and preserves retryable rows", async () => {
+	const source = await readFile(
+		new URL("../src/components/crudGrid/CollectionGrid.vue", import.meta.url),
+		"utf8",
+	);
+
+	assert.match(source, /const deleteError = ref<string \| null>\(null\)/);
+	assert.match(source, /deletePendingRows\.value = rows\.slice\(result\.deletedCount\)/);
+	assert.match(source, /v-if="deleteError"/);
+	assert.match(source, /class="crud-grid-error crud-grid-delete-error"/);
+	assert.match(source, /role="alert"/);
 });

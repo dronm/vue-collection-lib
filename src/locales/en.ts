@@ -8,6 +8,7 @@ const en = {
 			edit: "Edit",
 			copy: "Copy",
 			delete: "Delete",
+			retry: "Retry",
 			refresh: "Refresh",
 			save: "Save",
 			cancel: "Cancel",
@@ -35,6 +36,8 @@ const en = {
 		},
 		deleteConfirmTitle: "Confirm delete",
 		deleteConfirm: "Delete rows: {count}?",
+		deletePartialFailure: "Deleted rows: {count}. The remaining rows were not deleted.",
+		deleteReloadFailure: "The list could not be refreshed: {error}",
 		dirtyConfirm: {
 			title: "Unsaved changes",
 			message: "Fields have been modified. Save changes before leaving?",

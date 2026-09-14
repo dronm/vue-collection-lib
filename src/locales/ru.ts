@@ -8,6 +8,7 @@ const ru = {
 			edit: "Изменить",
 			copy: "Копировать",
 			delete: "Удалить",
+			retry: "Повторить",
 			refresh: "Обновить",
 			save: "Сохранить",
 			cancel: "Отмена",
@@ -35,6 +36,8 @@ const ru = {
 		},
 		deleteConfirmTitle: "Подтверждение удаления",
 		deleteConfirm: "Удалить строк: {count}?",
+		deletePartialFailure: "Удалено строк: {count}. Остальные строки не удалены.",
+		deleteReloadFailure: "Не удалось обновить список: {error}",
 		dirtyConfirm: {
 			title: "Есть несохраненные изменения",
 			message: "Поля были изменены. Сохранить изменения перед закрытием?",

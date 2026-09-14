@@ -449,6 +449,12 @@ const commands: GridCommand<Product, ProductKey>[] = [
 
 Context-menu commands use the same model. Set `:showContextMenu="false"` to disable the context menu.
 
+Automatic delete failures are formatted with `errorText()`. With confirmation enabled,
+the message is shown in the delete dialog and the failed row can be retried or cancelled.
+If a multi-row delete stops after partially succeeding, the grid is reloaded and Retry
+continues with only the failed and not-yet-attempted rows. Without confirmation, the
+same error is shown in the grid error panel.
+
 ### Search
 
 Search behavior is configured per column. Text fields support begins, contains, and exact matching. Number and date fields support exact and range matching. Reference columns map reference keys to backend filter fields.
