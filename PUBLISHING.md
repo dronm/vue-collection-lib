@@ -57,13 +57,13 @@ Delete the generated `.tgz` after testing if it must not be committed.
 
 ## Choose a version
 
-A published npm version is immutable and cannot be published again. The package in this archive is version `0.1.9`; bump it before publishing when that version already exists. Check the current registry version:
+A published npm version is immutable and cannot be published again. The package in this archive is version `0.1.10`. Check the current registry version before publishing:
 
 ```bash
 npm view @katren/vue-collection-lib version
 ```
 
-Update the package version according to semantic versioning:
+If the registry version is lower than `0.1.10`, publish this archive without another version change. If `0.1.10` already exists, update the package version according to semantic versioning:
 
 ```bash
 npm version patch

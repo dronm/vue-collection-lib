@@ -10,8 +10,9 @@ The package provides a server-driven CRUD grid, reference/autocomplete input, fo
 - optional server-driven hierarchical collections with group navigation, breadcrumbs, and flat/global-search mode;
 - built-in create, edit, copy, delete, search, and refresh commands;
 - keyboard shortcuts, row marking, cell cursor, context menu, and persisted grid state;
-- string, number, boolean, date, range, and reference search criteria;
+- string, number, boolean, date, datetime, range, and reference search criteria;
 - inline, modal, page, and tab edit modes;
+- built-in inline DatePicker editors for date and datetime fields;
 - automatic collection reload after WebSocket CRUD events;
 - reference autocomplete with open, collection-picker select, and clear actions;
 - create/update payload generation with changed fields only;
@@ -139,7 +140,6 @@ The `createCrudApi()` helper adapts a REST endpoint to the grid and form contrac
 import {
 	Conn,
 	createCrudApi,
-	transformJSON,
 } from "@katren/vue-collection-lib";
 
 interface ProductDTO {
@@ -165,14 +165,11 @@ type ProductUpd = Partial<ProductNew>;
 
 const http = new Conn("/api", 30_000);
 
-const fromDTO = (dto: ProductDTO): Product => {
-	const model = transformJSON(dto);
-
-	return {
-		...model,
-		price: Number(model.price),
-	};
-};
+const fromDTO = (dto: ProductDTO): Product => ({
+	...dto,
+	price: Number(dto.price),
+	updated_at: new Date(dto.updated_at),
+});
 
 export const productApi = createCrudApi<
 	Product,
@@ -457,7 +454,7 @@ same error is shown in the grid error panel.
 
 ### Search
 
-Search behavior is configured per column. Text fields support begins, contains, and exact matching. Number and date fields support exact and range matching. Reference columns map reference keys to backend filter fields.
+Search behavior is configured per column. Text fields support begins, contains, and exact matching. Number, date, and datetime fields support exact and range matching. Reference columns map reference keys to backend filter fields.
 
 ```ts
 const columns: GridColumn<Product>[] = [
@@ -474,6 +471,49 @@ const columns: GridColumn<Product>[] = [
 ```
 
 Applied criteria appear below the command panel and are persisted when `stateKey` is set.
+
+### Date and datetime inline editors
+
+Use `dataType: "date"` for a calendar date and `dataType: "datetime"` for a value that includes a time. Both use PrimeVue `DatePicker` automatically, so ordinary temporal columns do not need custom editor slots:
+
+```ts
+interface OrderRow {
+	id: number;
+	for_date: Date | null;
+	delivery_at: Date | null;
+}
+
+const columns: GridColumn<OrderRow>[] = [
+	{
+		field: "for_date",
+		headerKey: "Order.fields.for_date",
+		editable: true,
+		dataType: "date",
+	},
+	{
+		field: "delivery_at",
+		headerKey: "Order.fields.delivery_at",
+		editable: true,
+		dataType: "datetime",
+		editorProps: {
+			stepMinute: 5,
+			showButtonBar: true,
+		},
+	},
+];
+
+const createRow = (): OrderRow => ({
+	id: 0,
+	for_date: null,
+	delivery_at: null,
+});
+```
+
+The editor model is always one `Date` or `null`. Date fields hide the time controls; datetime fields show 24-hour time controls. The clear button is enabled by default, and `editorProps` forwards other DatePicker options such as `minDate`, `maxDate`, `stepMinute`, `showSeconds`, and `showButtonBar`. The grid protects `selectionMode`, `updateModelType`, and date-versus-datetime `showTime`, so options cannot accidentally change the model to an array or formatted string.
+
+Rows passed to `CollectionGrid` should already contain `Date | null`, not API strings. Convert DTO strings in `fromListDTO` and `fromDetailDTO`. `createCrudApi()` keeps model conversion explicit; `Conn` serializes outbound `Date` values as ISO strings. If a date-only endpoint requires `YYYY-MM-DD` rather than an ISO timestamp, map that field in `beforeCreate` and `beforeUpdate`.
+
+Use `datetime` for both timestamp and timestamptz fields at the grid layer. Their DatePicker behavior is identical; timezone and wire-format semantics belong in DTO conversion. Without a custom `format`, date cells use `toLocaleDateString()` and datetime cells use `toLocaleString()`. PrimeVue input formatting still comes from the application-level locale configuration described above.
 
 ### Slots
 

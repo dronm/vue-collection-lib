@@ -18,6 +18,7 @@ import Column, {
 	type ColumnPassThroughOptions,
 } from "primevue/column";
 import DataTable, { type DataTableSortEvent } from "primevue/datatable";
+import DatePicker from "primevue/datepicker";
 import Dialog from "primevue/dialog";
 import InputNumber from "primevue/inputnumber";
 import InputText from "primevue/inputtext";
@@ -58,6 +59,8 @@ import {
 import {
 	cloneGridRow,
 	formatGridValue,
+	gridDatePickerProps,
+	isGridDateDataType,
 	makeChangedModel,
 	makeCreateModel,
 } from "./gridUtils";
@@ -2245,6 +2248,13 @@ defineExpose<CollectionGridExpose>({
 						<InputNumber
 							v-else-if="column.dataType === 'number'"
 							v-bind="column.editorProps"
+							:modelValue="getReactiveGridEditRow(data)[field]"
+							class="crud-grid-editor-control"
+							@update:modelValue="applyGridInlineValue(data, column, $event)"
+						/>
+						<DatePicker
+							v-else-if="isGridDateDataType(column.dataType)"
+							v-bind="gridDatePickerProps(column.dataType, column.editorProps)"
 							:modelValue="getReactiveGridEditRow(data)[field]"
 							class="crud-grid-editor-control"
 							@update:modelValue="applyGridInlineValue(data, column, $event)"

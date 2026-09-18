@@ -18,6 +18,7 @@ import type {
 	GridSearchValueContext,
 } from "./types";
 import type { ReferenceValue } from "../../types/reference";
+import { isGridDateDataType } from "./gridUtils";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -40,7 +41,7 @@ export const searchOperationsForType = (
 		return ["begins", "contains", "exact"];
 	}
 
-	if (dataType === "number" || dataType === "date") {
+	if (dataType === "number" || isGridDateDataType(dataType)) {
 		return ["exact", "range"];
 	}
 
@@ -201,7 +202,7 @@ const normalizeDateSearchValue = (
 		return null;
 	}
 
-	if (column.searchDateOnly === false) {
+	if (!(column.searchDateOnly ?? column.dataType === "date")) {
 		return parsed.toISOString();
 	}
 
@@ -295,7 +296,7 @@ export const buildSearchFilters = (
 		const filters: CollectionFilter[] = [];
 
 		if (!searchValueIsEmpty(value.from)) {
-			const filterValue = column.dataType === "date"
+			const filterValue = isGridDateDataType(column.dataType)
 				? normalizeDateSearchValue(value.from, column, operation, "from")
 				: normalizeSearchValue(value.from, column, operation, "from");
 
@@ -307,7 +308,7 @@ export const buildSearchFilters = (
 		}
 
 		if (!searchValueIsEmpty(value.to)) {
-			const filterValue = column.dataType === "date"
+			const filterValue = isGridDateDataType(column.dataType)
 				? normalizeDateSearchValue(value.to, column, operation, "to")
 				: normalizeSearchValue(value.to, column, operation, "to");
 
@@ -321,9 +322,9 @@ export const buildSearchFilters = (
 		return filters;
 	}
 
-	if (column.dataType === "date" && operation === "exact") {
+	if (isGridDateDataType(column.dataType) && operation === "exact") {
 		const parsed = parseDateValue(value as GridSearchSingleValue);
-		if (parsed && column.searchDateOnly !== false) {
+		if (parsed && (column.searchDateOnly ?? column.dataType === "date")) {
 			return [
 				buildSingleFieldFilter(
 					column.searchField,
@@ -394,13 +395,16 @@ export const searchValueIsEmpty = (
 
 const formatSingleSearchValue = (
 	value: GridSearchSingleValue,
+	dataType?: GridSearchDataType,
 ): string => {
 	if (value === null || value === undefined) {
 		return "";
 	}
 
 	if (value instanceof Date) {
-		return value.toLocaleDateString();
+		return dataType === "datetime"
+			? value.toLocaleString()
+			: value.toLocaleDateString();
 	}
 
 	if (isReferenceValue(value)) {
@@ -412,12 +416,13 @@ const formatSingleSearchValue = (
 
 export const formatSearchValue = (
 	value: GridSearchValue,
+	dataType?: GridSearchDataType,
 ): string => {
 	if (isSearchRangeValue(value)) {
-		return `${formatSingleSearchValue(value.from)} - ${formatSingleSearchValue(value.to)}`;
+		return `${formatSingleSearchValue(value.from, dataType)} - ${formatSingleSearchValue(value.to, dataType)}`;
 	}
 
-	return formatSingleSearchValue(value);
+	return formatSingleSearchValue(value, dataType);
 };
 
 export const formatSearchValueForOperation = (
@@ -430,7 +435,7 @@ export const formatSearchValueForOperation = (
 		: null;
 	const formatted = column?.searchValueLabel && context
 		? column.searchValueLabel(value, context)
-		: formatSearchValue(value);
+		: formatSearchValue(value, column?.dataType);
 
 	if (operation === "begins") {
 		return `${formatted}*`;

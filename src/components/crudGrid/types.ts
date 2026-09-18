@@ -19,7 +19,13 @@ import type {
 export type GridCommandName = "create" | "edit" | "copy" | "delete" | "search" | "refresh" | string;
 export type GridCommandListMode = "default" | "append" | "replace";
 export type GridEditMode = "inline" | "modal" | "page" | "tab";
-export type GridCellDataType = "string" | "number" | "boolean" | "date" | "reference";
+export type GridCellDataType =
+	| "string"
+	| "number"
+	| "boolean"
+	| "date"
+	| "datetime"
+	| "reference";
 export type GridSearchDataType = GridCellDataType;
 export type GridSearchOperation = "begins" | "contains" | "exact" | "range";
 export type GridSearchSingleValue = string | number | boolean | Date | ReferenceValue | null;
@@ -90,7 +96,13 @@ export interface GridColumn<TModel extends object> {
 	sortField?: string;
 	editable?: boolean;
 	dataType?: GridCellDataType;
-	/** Props forwarded to the built-in inline editor component. */
+	/**
+	 * Props forwarded to the built-in inline editor component.
+	 *
+	 * Date and datetime columns forward these props to PrimeVue DatePicker.
+	 * The grid always keeps its Date/null contract by enforcing single selection
+	 * and Date model output after these props are applied.
+	 */
 	editorProps?: Record<string, unknown>;
 	/**
 	 * Normalizes a raw inline-editor value before it is assigned to the row.
@@ -121,8 +133,9 @@ export interface GridColumn<TModel extends object> {
 	searchComponent?: Component | string;
 	searchComponentProps?: Record<string, unknown>;
 	/**
-	 * Date columns are searched as a whole local calendar day by default.
-	 * Set to false when the server expects exact datetime values.
+	 * Date columns are searched as a whole local calendar day by default,
+	 * while datetime columns use exact instants by default. Override this when
+	 * the server expects the other behavior.
 	 */
 	searchDateOnly?: boolean;
 	/** Converts a UI search value to the raw server filter value. Useful for masked values like phones. */

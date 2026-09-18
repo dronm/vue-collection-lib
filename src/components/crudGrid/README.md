@@ -128,6 +128,51 @@ const columns: GridColumn<ReceiptItem>[] = [
 
 The same guarantee applies to custom editor slots: `data` is the reactive edit draft and `updateValue(value)` uses the same common write path as the built-in editors. Prefer `updateValue()` over assigning the edited field directly. Do not call `reactive()` in application grids just to support dependent fields.
 
+## Date and datetime inline editing
+
+Temporal columns have built-in PrimeVue `DatePicker` editors. Use `date` for a calendar date and `datetime` when the time is editable:
+
+```ts
+interface ScheduleRow {
+	id: number;
+	for_date: Date | null;
+	starts_at: Date | null;
+}
+
+const columns: GridColumn<ScheduleRow>[] = [
+	{
+		field: "for_date",
+		headerKey: "Schedule.fields.for_date",
+		editable: true,
+		dataType: "date",
+	},
+	{
+		field: "starts_at",
+		headerKey: "Schedule.fields.starts_at",
+		editable: true,
+		dataType: "datetime",
+		editorProps: {
+			stepMinute: 15,
+			showSeconds: false,
+		},
+	},
+];
+
+const createRow = (): ScheduleRow => ({
+	id: 0,
+	for_date: null,
+	starts_at: null,
+});
+```
+
+Both editors keep the row value as `Date | null`; they never replace it with localized display text. `date` hides time controls, while `datetime` enables them with a 24-hour default. Single selection and Date model output are enforced even if conflicting values are supplied in `editorProps`. A clear button is enabled by default so nullable fields can return to `null`.
+
+`editorProps` is also the extension point for other DatePicker options, including `minDate`, `maxDate`, `stepMinute`, `showSeconds`, and `showButtonBar`. Date input formatting and translated labels come from the host application's PrimeVue locale rather than column metadata.
+
+Convert string DTO fields to `Date | null` in `fromListDTO` and `fromDetailDTO` before a row reaches the grid. The unchanged create/update paths retain `Date` and `null`; `Conn` converts `Date` to ISO JSON at the HTTP boundary. Use `beforeCreate` or `beforeUpdate` when an endpoint needs a different wire format, especially `YYYY-MM-DD` for date-only values.
+
+At the grid layer, SQL `timestamp` and `timestamptz` values both use `dataType: "datetime"`. Their editor behavior is the same; application DTO conversion decides how offsets and timezone semantics are handled. Without a custom `format`, `date` displays with `toLocaleDateString()` and `datetime` with `toLocaleString()`.
+
 ## Search
 
 `CollectionGrid` includes a built-in `search` command. If a grid uses `commandsMode="replace"`, add the command explicitly:
@@ -167,7 +212,7 @@ Text columns support:
 - `contains`: `ILIKE '%value%'`
 - `exact`: `= value`
 
-Boolean and reference columns support exact search by default. Number and date columns support exact and range search by default.
+Boolean and reference columns support exact search by default. Number, date, and datetime columns support exact and range search by default.
 
 Reference columns can map reference keys to backend filter fields:
 
@@ -198,14 +243,14 @@ Grid-level keyboard handling is suspended while an inline row is actively being 
 
 In cell selection mode the grid stores both the current row and current column. `Ctrl+F`, the command-panel search command, and a new search dialog use the current cell column as the initial search column when no existing criterion is being edited.
 
-String search operations are shown as radio buttons. Number and date columns support `exact` and `range` operations by default. A range creates separate `>=` and `<=` filters for the same server-side search field.
+String search operations are shown as radio buttons. Number, date, and datetime columns support `exact` and `range` operations by default. A range creates separate `>=` and `<=` filters for the same server-side search field.
 
 Date columns are searched as a local calendar day by default. An exact date search becomes two filters:
 
 - `field >= YYYY-MM-DDT00:00:00.000`
 - `field <= YYYY-MM-DDT23:59:59.999`
 
-Set `searchDateOnly: false` on a column when the server expects exact datetime values instead.
+Datetime columns show time controls and search exact instants by default. Set `searchDateOnly: true` to search a datetime column as a whole local calendar day, or set `searchDateOnly: false` on a date column when the server expects an exact instant instead.
 
 For formatted columns, keep display formatting and server filtering separate. Use `searchComponent` for a masked/formatted input, `searchValueToFilter` to convert the UI value to raw server data, and `searchValueLabel` for the chip label.
 
@@ -227,7 +272,7 @@ const phoneColumn = {
 
 ## DatePicker locale/date format
 
-The search dialog uses PrimeVue `DatePicker` without hardcoding a locale. Configure the project-level PrimeVue locale once so every DatePicker uses Russian labels and `dd.mm.yy` input formatting.
+The search dialog and built-in inline date editors use PrimeVue `DatePicker` without hardcoding a locale. Configure the project-level PrimeVue locale once so every DatePicker uses Russian labels and `dd.mm.yy` input formatting.
 
 ```ts
 import { ru } from "primelocale/js/ru.js";

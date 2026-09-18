@@ -22,6 +22,10 @@ import {
 	isSearchRangeValue,
 	searchValueIsEmpty,
 } from "./gridSearchUtils";
+import {
+	gridDatePickerProps,
+	isGridDateDataType,
+} from "./gridUtils";
 import type {
 	GridSearchColumnOption,
 	GridSearchCriterion,
@@ -580,20 +584,20 @@ onBeforeUnmount(() => {
 					</div>
 
 					<div
-						v-else-if="operation === 'range' && currentColumn.dataType === 'date'"
+						v-else-if="operation === 'range' && isGridDateDataType(currentColumn.dataType)"
 						class="crud-grid-search-range"
 					>
 						<DatePicker
 							v-model="rangeDateFromValue"
+							v-bind="gridDatePickerProps(currentColumn.dataType)"
 							:placeholder="t('Grid.search.from')"
 							class="crud-grid-search-control"
-							showIcon
 						/>
 						<DatePicker
 							v-model="rangeDateToValue"
+							v-bind="gridDatePickerProps(currentColumn.dataType)"
 							:placeholder="t('Grid.search.to')"
 							class="crud-grid-search-control"
-							showIcon
 						/>
 					</div>
 
@@ -626,11 +630,11 @@ onBeforeUnmount(() => {
 					</div>
 
 					<DatePicker
-						v-else-if="currentColumn.dataType === 'date'"
+						v-else-if="isGridDateDataType(currentColumn.dataType)"
 						v-model="dateValue"
+						v-bind="gridDatePickerProps(currentColumn.dataType)"
 						:inputId="valueInputId"
 						class="crud-grid-search-control"
-						showIcon
 					/>
 
 					<ReferenceInput

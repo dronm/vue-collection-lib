@@ -1,4 +1,34 @@
-import type { GridColumn } from "./types";
+import type {
+	GridCellDataType,
+	GridColumn,
+} from "./types";
+
+export type GridDateDataType = Extract<GridCellDataType, "date" | "datetime">;
+
+export const isGridDateDataType = (
+	dataType: GridCellDataType | undefined,
+): dataType is GridDateDataType => {
+	return dataType === "date" || dataType === "datetime";
+};
+
+export const gridDatePickerProps = (
+	dataType: GridDateDataType,
+	editorProps?: Record<string, unknown>,
+): Record<string, unknown> => {
+	return {
+		showIcon: true,
+		showClear: true,
+		...(dataType === "datetime"
+			? {
+				hourFormat: "24",
+			}
+			: {}),
+		...editorProps,
+		showTime: dataType === "datetime",
+		selectionMode: "single",
+		updateModelType: "date",
+	};
+};
 
 export const cloneGridRow = <TModel extends object>(
 	row: TModel,
@@ -75,7 +105,9 @@ export const formatGridValue = <TModel extends object>(
 	}
 
 	if (value instanceof Date) {
-		return value.toLocaleString();
+		return column.dataType === "date"
+			? value.toLocaleDateString()
+			: value.toLocaleString();
 	}
 
 	if (typeof value === "boolean") {

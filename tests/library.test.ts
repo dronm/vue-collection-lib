@@ -13,7 +13,19 @@ import {
 } from "../src/api/createCrudApi.ts";
 import * as v from "valibot";
 import { transformJSON } from "../src/api/transformJSON.ts";
-import { makeCreateModel } from "../src/components/crudGrid/gridUtils.ts";
+import {
+	cloneGridRow,
+	formatGridValue,
+	gridDatePickerProps,
+	isGridDateDataType,
+	makeChangedModel,
+	makeCreateModel,
+} from "../src/components/crudGrid/gridUtils.ts";
+import {
+	buildSearchFilters,
+	formatSearchValue,
+	searchOperationsForType,
+} from "../src/components/crudGrid/gridSearchUtils.ts";
 import { deleteRowsSequentially } from "../src/components/crudGrid/deleteRows.ts";
 import {
 	applyGridInlineValue,
@@ -287,6 +299,40 @@ test("sends false JSON request bodies and allows timeout zero", async () => {
 	}
 });
 
+test("serializes Date and null request values as JSON rather than display strings", async () => {
+	const originalFetch = globalThis.fetch;
+	let requestBody: BodyInit | null | undefined;
+	const selected = new Date("2026-09-18T09:35:00.000Z");
+
+	globalThis.fetch = async (_input, init) => {
+		requestBody = init?.body;
+		return new Response(JSON.stringify({ ok: true }), {
+			status: 200,
+			headers: {
+				"Content-Type": "application/json",
+			},
+		});
+	};
+
+	try {
+		const conn = new Conn("https://example.test/api", 0);
+		await conn.post("/dates", {
+			starts_at: selected,
+			completed_at: null,
+		});
+
+		assert.deepEqual(
+			JSON.parse(String(requestBody)),
+			{
+				starts_at: selected.toISOString(),
+				completed_at: null,
+			},
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("converts only valid ISO date strings", () => {
 	const result = transformJSON({
 		valid: "2026-07-14T10:00:00Z",
@@ -351,6 +397,298 @@ test("builds inline create payload from editable columns", () => {
 		name: "New row",
 		active: true,
 	});
+});
+
+test("configures date and datetime DatePicker editors without allowing string models", () => {
+	assert.equal(isGridDateDataType("date"), true);
+	assert.equal(isGridDateDataType("datetime"), true);
+	assert.equal(isGridDateDataType("string"), false);
+
+	assert.deepEqual(
+		gridDatePickerProps("date", {
+			showClear: false,
+			showTime: true,
+			selectionMode: "range",
+			updateModelType: "string",
+		}),
+		{
+			showIcon: true,
+			showClear: false,
+			showTime: false,
+			selectionMode: "single",
+			updateModelType: "date",
+		},
+	);
+
+	assert.deepEqual(
+		gridDatePickerProps("datetime", {
+			hourFormat: "12",
+			showIcon: false,
+		}),
+		{
+			showIcon: false,
+			showClear: true,
+			hourFormat: "12",
+			showTime: true,
+			selectionMode: "single",
+			updateModelType: "date",
+		},
+	);
+});
+
+test("inline date edit preserves a Date value", async () => {
+	type Row = {
+		for_date: Date | null;
+	};
+
+	const row: Row = {
+		for_date: null,
+	};
+	const column: GridColumn<Row> = {
+		field: "for_date",
+		headerKey: "for_date",
+		editable: true,
+		dataType: "date",
+	};
+	const selected = new Date(2026, 8, 18);
+
+	await applyGridInlineValue(row, column, selected);
+
+	assert.equal(row.for_date, selected);
+	assert.ok(row.for_date instanceof Date);
+});
+
+test("inline datetime edit preserves the selected date and time", async () => {
+	type Row = {
+		created_at: Date | null;
+	};
+
+	const row: Row = {
+		created_at: null,
+	};
+	const column: GridColumn<Row> = {
+		field: "created_at",
+		headerKey: "created_at",
+		editable: true,
+		dataType: "datetime",
+	};
+	const selected = new Date(2026, 8, 18, 14, 35, 42);
+
+	await applyGridInlineValue(row, column, selected);
+
+	assert.equal(row.created_at, selected);
+	assert.equal(row.created_at.getHours(), 14);
+	assert.equal(row.created_at.getMinutes(), 35);
+});
+
+test("inline date clearing stores null", async () => {
+	type Row = {
+		some_date: Date | null;
+	};
+
+	const row: Row = {
+		some_date: new Date(2026, 8, 18),
+	};
+	const column: GridColumn<Row> = {
+		field: "some_date",
+		headerKey: "some_date",
+		editable: true,
+		dataType: "date",
+	};
+
+	await applyGridInlineValue(row, column, null);
+
+	assert.equal(row.some_date, null);
+});
+
+test("inline create payload preserves Date and null values", () => {
+	type Row = {
+		id: number;
+		for_date: Date | null;
+		completed_at: Date | null;
+	};
+	type New = Pick<Row, "for_date" | "completed_at">;
+
+	const forDate = new Date(2026, 8, 20);
+	const model = makeCreateModel<Row, New>(
+		{
+			id: 0,
+			for_date: forDate,
+			completed_at: null,
+		},
+		[
+			{
+				field: "for_date",
+				headerKey: "for_date",
+				editable: true,
+				dataType: "date",
+			},
+			{
+				field: "completed_at",
+				headerKey: "completed_at",
+				editable: true,
+				dataType: "datetime",
+			},
+		],
+	);
+
+	assert.equal(model.for_date, forDate);
+	assert.ok(model.for_date instanceof Date);
+	assert.equal(model.completed_at, null);
+});
+
+test("inline update sends changed dates and nullable clears", () => {
+	type Row = {
+		for_date: Date;
+		completed_at: Date | null;
+	};
+	type Update = Partial<Row>;
+
+	const originalDate = new Date(2026, 8, 18);
+	const originalCompletedAt = new Date(2026, 8, 18, 12, 0);
+	const changedDate = new Date(2026, 8, 19);
+	const columns: GridColumn<Row>[] = [
+		{
+			field: "for_date",
+			headerKey: "for_date",
+			editable: true,
+			dataType: "date",
+		},
+		{
+			field: "completed_at",
+			headerKey: "completed_at",
+			editable: true,
+			dataType: "datetime",
+		},
+	];
+
+	const model = makeChangedModel<Row, Update>(
+		{
+			for_date: originalDate,
+			completed_at: originalCompletedAt,
+		},
+		{
+			for_date: changedDate,
+			completed_at: null,
+		},
+		columns,
+	);
+
+	assert.equal(model.for_date, changedDate);
+	assert.ok(model.for_date instanceof Date);
+	assert.equal(model.completed_at, null);
+
+	assert.deepEqual(
+		makeChangedModel<Row, Update>(
+			{
+				for_date: originalDate,
+				completed_at: null,
+			},
+			{
+				for_date: new Date(originalDate),
+				completed_at: null,
+			},
+			columns,
+		),
+		{},
+	);
+});
+
+test("cloned inline drafts keep date cancellation isolated", () => {
+	const original = {
+		for_date: new Date(2026, 8, 18),
+		created_at: new Date(2026, 8, 18, 9, 30),
+	};
+	const draft = cloneGridRow(original);
+
+	assert.notEqual(draft.for_date, original.for_date);
+	assert.notEqual(draft.created_at, original.created_at);
+
+	draft.for_date.setDate(25);
+	draft.created_at.setHours(16);
+
+	assert.equal(original.for_date.getDate(), 18);
+	assert.equal(original.created_at.getHours(), 9);
+});
+
+test("formats date and datetime columns with their standard display conventions", () => {
+	type Row = {
+		for_date: Date | null;
+		created_at: Date | null;
+	};
+
+	const value = new Date(2026, 8, 18, 14, 35);
+	const row: Row = {
+		for_date: value,
+		created_at: value,
+	};
+
+	assert.equal(
+		formatGridValue(row, {
+			field: "for_date",
+			headerKey: "for_date",
+			dataType: "date",
+		}),
+		value.toLocaleDateString(),
+	);
+	assert.equal(
+		formatGridValue(row, {
+			field: "created_at",
+			headerKey: "created_at",
+			dataType: "datetime",
+		}),
+		value.toLocaleString(),
+	);
+	assert.equal(
+		formatGridValue(row, {
+			field: "for_date",
+			headerKey: "for_date",
+			dataType: "date",
+			format: () => "custom",
+		}),
+		"custom",
+	);
+	assert.equal(
+		formatGridValue(
+			{
+				for_date: null,
+				created_at: null,
+			},
+			{
+				field: "for_date",
+				headerKey: "for_date",
+				dataType: "date",
+			},
+		),
+		"",
+	);
+});
+
+test("datetime search uses DatePicker-compatible instants instead of text filters", () => {
+	const value = new Date("2026-09-18T09:35:00.000Z");
+	const column = {
+		field: "created_at",
+		header: "Created at",
+		searchField: "created_at",
+		dataType: "datetime" as const,
+		operations: searchOperationsForType("datetime"),
+	};
+
+	assert.deepEqual(column.operations, ["exact", "range"]);
+	assert.deepEqual(
+		buildSearchFilters(column, "exact", value),
+		[{
+			j: "and",
+			f: {
+				created_at: {
+					o: "e",
+					v: value.toISOString(),
+				},
+			},
+		}],
+	);
+	assert.equal(formatSearchValue(value, "datetime"), value.toLocaleString());
+	assert.equal(formatSearchValue(value, "date"), value.toLocaleDateString());
 });
 
 test("detects reference selection mode from a route query", () => {
@@ -582,6 +920,25 @@ test("CollectionGrid wires inline editors through the reactive draft contract", 
 	assert.match(
 		source,
 		/:updateValue="\(value(?::\s*(?:any|unknown))?\) => applyGridInlineValue\(data, column, value\)"/,
+	);
+	assert.match(source, /:modelValue="getReactiveGridEditRow\(data\)\[field\]"/);
+	assert.match(
+		source,
+		/@update:modelValue="applyGridInlineValue\(data, column, \$event\)"/,
+	);
+});
+
+test("CollectionGrid uses DatePicker for built-in date and datetime editors", async () => {
+	const source = await readFile(
+		new URL("../src/components/crudGrid/CollectionGrid.vue", import.meta.url),
+		"utf8",
+	);
+
+	assert.match(source, /import DatePicker from "primevue\/datepicker"/);
+	assert.match(source, /<DatePicker\s+[\s\S]*?v-else-if="isGridDateDataType\(column\.dataType\)"/);
+	assert.match(
+		source,
+		/v-bind="gridDatePickerProps\(column\.dataType, column\.editorProps\)"/,
 	);
 	assert.match(source, /:modelValue="getReactiveGridEditRow\(data\)\[field\]"/);
 	assert.match(
