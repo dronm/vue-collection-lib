@@ -73,6 +73,17 @@ const emit = defineEmits<{
 	clear: [];
 }>();
 
+const slots = defineSlots<{
+	option?: (props: {
+		row: TRow;
+		value: ReferenceValue<TKeys>;
+	}) => unknown;
+	"input-prefix"?: (props: {
+		modelValue: ReferenceValue<TKeys> | null;
+		disabled: boolean;
+	}) => unknown;
+}>();
+
 const router = useRouter();
 const suggestions = shallowRef<ReferenceOption[]>([]);
 const loading = shallowRef(false);
@@ -341,30 +352,52 @@ const clearValue = (): void => {
 			class="crud-reference-input-controls"
 			:class="{ 'crud-reference-input-controls--with-actions': hasActionButtons }"
 		>
-			<AutoComplete
-				fluid
-				:inputId="props.id"
-				:modelValue="props.modelValue"
-				:suggestions="suggestions"
-				optionLabel="descr"
-				class="crud-reference-input-autocomplete"
-				inputClass="crud-reference-input-autocomplete-input"
-				:placeholder="props.placeholder"
-				:disabled="props.disabled"
-				:required="props.required"
-				:invalid="inputInvalid"
-				:loading="loading"
-				:delay="props.autocomplete.delay ?? 250"
-				:forceSelection="props.autocomplete.forceSelection ?? false"
-				:completeOnFocus="props.autocomplete.completeOnFocus ?? false"
-				@complete="complete"
-				@item-select="selectOption"
-				@update:modelValue="updateModelValue"
+			<div
+				class="crud-reference-input-field"
+				:class="{ 'crud-reference-input-field--with-prefix': Boolean(slots['input-prefix']) }"
 			>
-				<template #option="{ option }">
-					<span>{{ option.descr }}</span>
-				</template>
-			</AutoComplete>
+				<AutoComplete
+					fluid
+					:inputId="props.id"
+					:modelValue="props.modelValue"
+					:suggestions="suggestions"
+					optionLabel="descr"
+					class="crud-reference-input-autocomplete"
+					inputClass="crud-reference-input-autocomplete-input"
+					:placeholder="props.placeholder"
+					:disabled="props.disabled"
+					:required="props.required"
+					:invalid="inputInvalid"
+					:loading="loading"
+					:delay="props.autocomplete.delay ?? 250"
+					:forceSelection="props.autocomplete.forceSelection ?? false"
+					:completeOnFocus="props.autocomplete.completeOnFocus ?? false"
+					@complete="complete"
+					@item-select="selectOption"
+					@update:modelValue="updateModelValue"
+				>
+					<template #option="{ option }">
+						<slot
+							name="option"
+							:row="option.__row"
+							:value="stripOption(option)"
+						>
+							<span>{{ option.descr }}</span>
+						</slot>
+					</template>
+				</AutoComplete>
+
+				<div
+					v-if="slots['input-prefix']"
+					class="crud-reference-input-prefix"
+				>
+					<slot
+						name="input-prefix"
+						:modelValue="props.modelValue"
+						:disabled="props.disabled"
+					/>
+				</div>
+			</div>
 
 			<Button
 				v-if="props.showOpen"
@@ -431,6 +464,32 @@ const clearValue = (): void => {
 	display: flex;
 	min-width: 0;
 	width: 100%;
+}
+
+.crud-reference-input-field {
+	display: flex;
+	flex: 1 1 0%;
+	min-width: 0;
+	position: relative;
+	width: 0;
+}
+
+.crud-reference-input-prefix {
+	align-items: center;
+	display: flex;
+	height: 100%;
+	justify-content: center;
+	left: 0.5rem;
+	position: absolute;
+	top: 0;
+	width: var(--crud-reference-input-prefix-width, 2rem);
+	z-index: 1;
+}
+
+.crud-reference-input-field--with-prefix
+	:deep(.crud-reference-input-autocomplete-input) {
+	/* Keep prefix space when an application overrides compact input padding. */
+	padding-left: calc(var(--crud-reference-input-prefix-width, 2rem) + 1rem) !important;
 }
 
 :deep(.crud-reference-input-autocomplete) {

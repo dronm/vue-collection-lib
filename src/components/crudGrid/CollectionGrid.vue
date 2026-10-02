@@ -22,6 +22,7 @@ import DatePicker from "primevue/datepicker";
 import Dialog from "primevue/dialog";
 import InputNumber from "primevue/inputnumber";
 import InputText from "primevue/inputtext";
+import Select from "primevue/select";
 
 import ReferenceKeyInput from "../reference/ReferenceKeyInput.vue";
 import ReferenceKeyLabel from "../reference/ReferenceKeyLabel.vue";
@@ -63,6 +64,7 @@ import {
 	isGridDateDataType,
 	makeChangedModel,
 	makeCreateModel,
+	resolveGridEnumOptionLabel,
 } from "./gridUtils";
 import {
 	makeReferenceSelectionMessage,
@@ -72,6 +74,7 @@ import {
 import {
 	buildSearchColumnOptions,
 	buildSearchCriterion,
+	formatSearchValueForOperation,
 } from "./gridSearchUtils";
 import type {
 	CollectionGridApi,
@@ -86,6 +89,7 @@ import type {
 	GridCreateContext,
 	GridDeleteEvent,
 	GridEditMode,
+	GridEnumOption,
 	GridHierarchyConfig,
 	GridRowClass,
 	GridRowClassResolver,
@@ -292,6 +296,41 @@ const grid = useCollectionGrid<TModel, TKey, TNew, TUpd, TDetailModel>({
 const searchableColumns = computed(() => {
 	return buildSearchColumnOptions(props.columns, t);
 });
+
+const displaySearchCriteria = computed(() => {
+	return grid.searchCriteria.value.map((criterion) => {
+		const column = searchableColumns.value.find((item) => {
+			return item.field === criterion.field;
+		});
+
+		if (!column) {
+			return criterion;
+		}
+
+		return {
+			...criterion,
+			label: column.header,
+			operationLabel: t(`Grid.search.operations.${criterion.operation}`),
+			valueLabel: formatSearchValueForOperation(
+				criterion.value,
+				criterion.operation,
+				column,
+				t,
+			),
+		};
+	});
+});
+
+const resolvedEnumOptions = (
+	column: GridColumn<TModel>,
+): GridEnumOption[] => {
+	return (column.enumOptions ?? []).map((option) => {
+		return {
+			...option,
+			label: resolveGridEnumOptionLabel(option, t),
+		};
+	});
+};
 
 const currentSearchField = computed(() => {
 	if (effectiveRowSelection.value || grid.selectedCell.value === null) {
@@ -1990,7 +2029,7 @@ defineExpose<CollectionGridExpose>({
 		/>
 
 		<GridSearchPanel
-			:criteria="grid.searchCriteria.value"
+			:criteria="displaySearchCriteria"
 			@open="openSearchCriterion"
 			@remove="removeSearchCriterion"
 		/>
@@ -2212,7 +2251,7 @@ defineExpose<CollectionGridExpose>({
 								:reference="column.reference"
 							/>
 							<template v-else>
-								{{ formatGridValue(data, column) }}
+								{{ formatGridValue(data, column, t) }}
 							</template>
 						</slot>
 					</div>
@@ -2256,6 +2295,17 @@ defineExpose<CollectionGridExpose>({
 							v-else-if="isGridDateDataType(column.dataType)"
 							v-bind="gridDatePickerProps(column.dataType, column.editorProps)"
 							:modelValue="getReactiveGridEditRow(data)[field]"
+							class="crud-grid-editor-control"
+							@update:modelValue="applyGridInlineValue(data, column, $event)"
+						/>
+						<Select
+							v-else-if="column.dataType === 'enum'"
+							v-bind="column.editorProps"
+							:modelValue="getReactiveGridEditRow(data)[field]"
+							:options="resolvedEnumOptions(column)"
+							optionLabel="label"
+							optionValue="value"
+							optionDisabled="disabled"
 							class="crud-grid-editor-control"
 							@update:modelValue="applyGridInlineValue(data, column, $event)"
 						/>

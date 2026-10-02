@@ -18,7 +18,10 @@ import type {
 	GridSearchValueContext,
 } from "./types";
 import type { ReferenceValue } from "../../types/reference";
-import { isGridDateDataType } from "./gridUtils";
+import {
+	isGridDateDataType,
+	resolveGridEnumValueLabel,
+} from "./gridUtils";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,6 +85,9 @@ export const buildSearchColumnOptions = <TModel extends object>(
 						: undefined),
 				searchComponent: column.searchComponent,
 				searchComponentProps: column.searchComponentProps,
+				enumOptions: column.enumOptions
+					? column.enumOptions.map((option) => ({ ...option }))
+					: undefined,
 				searchDateOnly: column.searchDateOnly,
 				searchValueToFilter: column.searchValueToFilter,
 				searchValueLabel: column.searchValueLabel,
@@ -425,17 +431,33 @@ export const formatSearchValue = (
 	return formatSingleSearchValue(value, dataType);
 };
 
+const formatDefaultSearchValue = (
+	value: GridSearchValue,
+	column?: GridSearchColumnOption,
+	translate?: (key: string) => string,
+): string => {
+	if (
+		column?.dataType === "enum"
+		&& !isSearchRangeValue(value)
+	) {
+		return resolveGridEnumValueLabel(value, column.enumOptions, translate);
+	}
+
+	return formatSearchValue(value, column?.dataType);
+};
+
 export const formatSearchValueForOperation = (
 	value: GridSearchValue,
 	operation: GridSearchOperation,
 	column?: GridSearchColumnOption,
+	translate?: (key: string) => string,
 ): string => {
 	const context = column
 		? makeValueContext(column, operation)
 		: null;
 	const formatted = column?.searchValueLabel && context
 		? column.searchValueLabel(value, context)
-		: formatSearchValue(value, column?.dataType);
+		: formatDefaultSearchValue(value, column, translate);
 
 	if (operation === "begins") {
 		return `${formatted}*`;
@@ -472,7 +494,12 @@ export const buildSearchCriterion = (
 		operation,
 		operationLabel: translate(`Grid.search.operations.${operation}`),
 		value: input.value,
-		valueLabel: formatSearchValueForOperation(input.value, operation, column),
+		valueLabel: formatSearchValueForOperation(
+			input.value,
+			operation,
+			column,
+			translate,
+		),
 		filter: filters[0] ?? {
 			j: FilterJoinParam.AND,
 			f: {},

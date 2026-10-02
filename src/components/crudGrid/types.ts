@@ -19,12 +19,22 @@ import type {
 export type GridCommandName = "create" | "edit" | "copy" | "delete" | "search" | "refresh" | string;
 export type GridCommandListMode = "default" | "append" | "replace";
 export type GridEditMode = "inline" | "modal" | "page" | "tab";
+export type GridEnumValue = string | number;
+
+export interface GridEnumOption {
+	value: GridEnumValue;
+	label?: string;
+	labelKey?: string;
+	disabled?: boolean;
+}
+
 export type GridCellDataType =
 	| "string"
 	| "number"
 	| "boolean"
 	| "date"
 	| "datetime"
+	| "enum"
 	| "reference";
 export type GridSearchDataType = GridCellDataType;
 export type GridSearchOperation = "begins" | "contains" | "exact" | "range";
@@ -99,11 +109,13 @@ export interface GridColumn<TModel extends object> {
 	/**
 	 * Props forwarded to the built-in inline editor component.
 	 *
-	 * Date and datetime columns forward these props to PrimeVue DatePicker.
-	 * The grid always keeps its Date/null contract by enforcing single selection
-	 * and Date model output after these props are applied.
+	 * Enum columns forward these props to PrimeVue Select unchanged. Date and
+	 * datetime columns forward them to PrimeVue DatePicker, then enforce single
+	 * selection and Date model output to preserve the Date/null contract.
 	 */
 	editorProps?: Record<string, unknown>;
+	/** Options used by built-in enum body, editor, and search rendering. */
+	enumOptions?: readonly GridEnumOption[];
 	/**
 	 * Normalizes a raw inline-editor value before it is assigned to the row.
 	 * Useful for null handling, rounding, trimming, and similar field-local rules.
@@ -166,6 +178,7 @@ export interface GridSearchColumnOption {
 	searchField: string;
 	dataType: GridSearchDataType;
 	operations: GridSearchOperation[];
+	enumOptions?: readonly GridEnumOption[];
 	referenceKeys?: Record<string, string>;
 	referenceAutocomplete?: ReferenceAutocompleteConfig<any, ReferenceKeys>;
 	referenceOpenAction?: ReferenceRouteAction<ReferenceValue<ReferenceKeys>>;

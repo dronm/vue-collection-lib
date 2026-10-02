@@ -10,8 +10,9 @@ The package provides a server-driven CRUD grid, reference/autocomplete input, fo
 - optional server-driven hierarchical collections with group navigation, breadcrumbs, and flat/global-search mode;
 - built-in create, edit, copy, delete, search, and refresh commands;
 - keyboard shortcuts, row marking, cell cursor, context menu, and persisted grid state;
-- string, number, boolean, date, datetime, range, and reference search criteria;
+- string, number, boolean, enum, date, datetime, range, and reference search criteria;
 - inline, modal, page, and tab edit modes;
+- built-in inline Select editors for enum fields;
 - built-in inline DatePicker editors for date and datetime fields;
 - automatic collection reload after WebSocket CRUD events;
 - reference autocomplete with open, collection-picker select, and clear actions;
@@ -454,7 +455,7 @@ same error is shown in the grid error panel.
 
 ### Search
 
-Search behavior is configured per column. Text fields support begins, contains, and exact matching. Number, date, and datetime fields support exact and range matching. Reference columns map reference keys to backend filter fields.
+Search behavior is configured per column. Text fields support begins, contains, and exact matching. Enum fields support exact matching with their raw option value. Number, date, and datetime fields support exact and range matching. Reference columns map reference keys to backend filter fields.
 
 ```ts
 const columns: GridColumn<Product>[] = [
@@ -471,6 +472,49 @@ const columns: GridColumn<Product>[] = [
 ```
 
 Applied criteria appear below the command panel and are persisted when `stateKey` is set.
+
+### Enum columns
+
+Use `dataType: "enum"` to share one option definition between cell display, inline editing, and exact search. The built-in editor and search control use PrimeVue `Select`; their models remain the raw string or number values.
+
+```ts
+import type {
+	GridColumn,
+	GridEnumOption,
+} from "@katren/vue-collection-lib";
+
+interface MaterialStatusRow {
+	id: number;
+	status: "at_work" | "on_maintenance";
+}
+
+const materialStatusOptions = [
+	{
+		value: "at_work",
+		labelKey: "MaterialStatusType.at_work",
+	},
+	{
+		value: "on_maintenance",
+		labelKey: "MaterialStatusType.on_maintenance",
+	},
+] as const satisfies readonly GridEnumOption[];
+
+const columns: GridColumn<MaterialStatusRow>[] = [
+	{
+		field: "status",
+		headerKey: "MaterialStatus.fields.status",
+		sortable: true,
+		editable: true,
+		dataType: "enum",
+		enumOptions: materialStatusOptions,
+		editorProps: {
+			showClear: false,
+		},
+	},
+];
+```
+
+For display, `label` takes precedence over a translated `labelKey`, followed by the raw value as a fallback. `disabled` is forwarded to both Select controls. Clearing is not enabled automatically; opt into it with `editorProps.showClear`. A custom `format`, editor slot, search component, or search value hook continues to override the built-in behavior.
 
 ### Date and datetime inline editors
 

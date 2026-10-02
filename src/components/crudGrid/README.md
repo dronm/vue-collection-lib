@@ -173,6 +173,32 @@ Convert string DTO fields to `Date | null` in `fromListDTO` and `fromDetailDTO` 
 
 At the grid layer, SQL `timestamp` and `timestamptz` values both use `dataType: "datetime"`. Their editor behavior is the same; application DTO conversion decides how offsets and timezone semantics are handled. Without a custom `format`, `date` displays with `toLocaleDateString()` and `datetime` with `toLocaleString()`.
 
+## Enum inline editing
+
+Enum columns use PrimeVue `Select` for inline editing and search without requiring custom slots:
+
+```ts
+const statusOptions = [
+	{ value: "at_work", labelKey: "MaterialStatusType.at_work" },
+	{ value: "on_maintenance", labelKey: "MaterialStatusType.on_maintenance" },
+] as const satisfies readonly GridEnumOption[];
+
+const columns: GridColumn<MaterialStatusRow>[] = [
+	{
+		field: "status",
+		headerKey: "MaterialStatus.fields.status",
+		editable: true,
+		dataType: "enum",
+		enumOptions: statusOptions,
+		editorProps: {
+			showClear: false,
+		},
+	},
+];
+```
+
+Options support raw string or number values, `label`, translated `labelKey`, and `disabled`. Display and search use strict value equality, while unknown values fall back to their string form. Enum search defaults to `exact` and sends the raw value. The library does not enable Select clearing automatically.
+
 ## Search
 
 `CollectionGrid` includes a built-in `search` command. If a grid uses `commandsMode="replace"`, add the command explicitly:
@@ -212,7 +238,7 @@ Text columns support:
 - `contains`: `ILIKE '%value%'`
 - `exact`: `= value`
 
-Boolean and reference columns support exact search by default. Number, date, and datetime columns support exact and range search by default.
+Boolean, enum, and reference columns support exact search by default. Number, date, and datetime columns support exact and range search by default.
 
 Reference columns can map reference keys to backend filter fields:
 

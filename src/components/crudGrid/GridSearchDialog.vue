@@ -25,6 +25,7 @@ import {
 import {
 	gridDatePickerProps,
 	isGridDateDataType,
+	resolveGridEnumOptionLabel,
 } from "./gridUtils";
 import type {
 	GridSearchColumnOption,
@@ -98,6 +99,20 @@ const operationOptions = computed(() => {
 
 const operationGroupName = computed(() => {
 	return `crud-grid-search-operation-${selectedField.value ?? "none"}`;
+});
+
+const resolvedEnumOptions = computed(() => {
+	if (currentColumn.value?.dataType !== "enum") {
+		return [];
+	}
+
+	return (currentColumn.value.enumOptions ?? []).map((option) => {
+		return {
+			value: option.value,
+			label: resolveGridEnumOptionLabel(option, (key) => t(key)),
+			disabled: option.disabled,
+		};
+	});
 });
 
 const defaultOperationForColumn = (
@@ -564,6 +579,18 @@ onBeforeUnmount(() => {
 						:id="valueInputId"
 						:modelValue="value"
 						v-bind="currentColumn.searchComponentProps"
+						@update:modelValue="setSearchValue"
+					/>
+
+					<Select
+						v-else-if="currentColumn.dataType === 'enum'"
+						:inputId="valueInputId"
+						:modelValue="value"
+						:options="resolvedEnumOptions"
+						optionLabel="label"
+						optionValue="value"
+						optionDisabled="disabled"
+						class="crud-grid-search-control"
 						@update:modelValue="setSearchValue"
 					/>
 

@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { isProxy, isReactive, nextTick, watchEffect } from "vue";
+import {
+	computed,
+	isProxy,
+	isReactive,
+	nextTick,
+	ref,
+	watchEffect,
+} from "vue";
 
 import { APIError, Conn } from "../src/api/Conn.ts";
 import {
@@ -20,8 +27,12 @@ import {
 	isGridDateDataType,
 	makeChangedModel,
 	makeCreateModel,
+	resolveGridEnumOptionLabel,
+	resolveGridEnumValueLabel,
 } from "../src/components/crudGrid/gridUtils.ts";
 import {
+	buildSearchColumnOptions,
+	buildSearchCriterion,
 	buildSearchFilters,
 	formatSearchValue,
 	searchOperationsForType,
@@ -664,6 +675,244 @@ test("formats date and datetime columns with their standard display conventions"
 	);
 });
 
+test("resolves direct enum labels before translation", () => {
+	const translatedKeys: string[] = [];
+	const translate = (key: string): string => {
+		translatedKeys.push(key);
+		return `translated:${key}`;
+	};
+
+	assert.equal(
+		resolveGridEnumOptionLabel(
+			{
+				value: "at_work",
+				label: "At work",
+				labelKey: "MaterialStatusType.at_work",
+			},
+			translate,
+		),
+		"At work",
+	);
+	assert.equal(
+		resolveGridEnumOptionLabel(
+			{
+				value: "empty_label",
+				label: "",
+				labelKey: "MaterialStatusType.empty_label",
+			},
+			translate,
+		),
+		"",
+	);
+	assert.deepEqual(translatedKeys, []);
+});
+
+test("resolves translated enum label keys reactively", async () => {
+	type StatusRow = {
+		status: "at_work";
+	};
+
+	const locale = ref<"en" | "ru">("en");
+	const messages = {
+		en: {
+			"MaterialStatusType.at_work": "At work",
+		},
+		ru: {
+			"MaterialStatusType.at_work": "В работе",
+		},
+	};
+	const column: GridColumn<StatusRow> = {
+		field: "status",
+		headerKey: "MaterialStatus.fields.status",
+		dataType: "enum",
+		enumOptions: [
+			{
+				value: "at_work",
+				labelKey: "MaterialStatusType.at_work",
+			},
+		],
+	};
+	const formatted = computed(() => {
+		return formatGridValue(
+			{ status: "at_work" },
+			column,
+			(key) => messages[locale.value][key as keyof typeof messages.en] ?? key,
+		);
+	});
+
+	assert.equal(
+		resolveGridEnumOptionLabel(
+			{
+				value: "at_work",
+				labelKey: "MaterialStatusType.at_work",
+			},
+			(key) => messages.en[key as keyof typeof messages.en] ?? key,
+		),
+		"At work",
+	);
+	assert.equal(formatted.value, "At work");
+
+	locale.value = "ru";
+	await nextTick();
+
+	assert.equal(formatted.value, "В работе");
+});
+
+test("formats unknown and nullish enum values without coercive matching", () => {
+	type StatusRow = {
+		status: string | number | null | undefined;
+	};
+
+	const options = [
+		{
+			value: 1,
+			label: "Numeric one",
+		},
+	] as const;
+	const column: GridColumn<StatusRow> = {
+		field: "status",
+		headerKey: "status",
+		dataType: "enum",
+		enumOptions: options,
+	};
+
+	assert.equal(resolveGridEnumValueLabel(1, options), "Numeric one");
+	assert.equal(resolveGridEnumValueLabel("1", options), "1");
+	assert.equal(resolveGridEnumValueLabel("unknown", options), "unknown");
+	assert.equal(resolveGridEnumValueLabel(null, options), "");
+	assert.equal(resolveGridEnumValueLabel(undefined, options), "");
+	assert.equal(formatGridValue({ status: 1 }, column), "Numeric one");
+	assert.equal(formatGridValue({ status: "1" }, column), "1");
+	assert.equal(formatGridValue({ status: "unknown" }, column), "unknown");
+	assert.equal(formatGridValue({ status: null }, column), "");
+	assert.equal(formatGridValue({ status: undefined }, column), "");
+});
+
+test("custom grid format takes precedence over automatic enum formatting", () => {
+	type StatusRow = {
+		status: string | null;
+	};
+
+	const column: GridColumn<StatusRow> = {
+		field: "status",
+		headerKey: "MaterialStatus.fields.status",
+		dataType: "enum",
+		enumOptions: [
+			{
+				value: "at_work",
+				label: "At work",
+			},
+		],
+		format: (value) => `custom:${String(value)}`,
+	};
+
+	assert.equal(formatGridValue({ status: "at_work" }, column), "custom:at_work");
+	assert.equal(formatGridValue({ status: null }, column), "custom:null");
+});
+
+test("enum search uses raw values and translated chip labels", () => {
+	type StatusRow = {
+		status: "at_work" | "on_maintenance";
+	};
+
+	const enumOptions = [
+		{
+			value: "at_work",
+			labelKey: "MaterialStatusType.at_work",
+		},
+		{
+			value: "on_maintenance",
+			labelKey: "MaterialStatusType.on_maintenance",
+			disabled: true,
+		},
+	] as const;
+	const [column] = buildSearchColumnOptions<StatusRow>(
+		[
+			{
+				field: "status",
+				headerKey: "MaterialStatus.fields.status",
+				dataType: "enum",
+				enumOptions,
+			},
+		],
+		(key) => key,
+	);
+
+	assert.ok(column);
+	assert.deepEqual(column.operations, ["exact"]);
+	assert.notEqual(column.enumOptions, enumOptions);
+	assert.notEqual(column.enumOptions?.[0], enumOptions[0]);
+	assert.equal(column.enumOptions?.[1]?.disabled, true);
+
+	const translated = new Map<string, string>([
+		["Grid.search.operations.exact", "Equals"],
+		["MaterialStatusType.at_work", "At work"],
+		["MaterialStatusType.on_maintenance", "On maintenance"],
+	]);
+	const criterion = buildSearchCriterion(
+		{
+			field: "status",
+			operation: "exact",
+			value: "on_maintenance",
+		},
+		[column],
+		(key) => translated.get(key) ?? key,
+		"status-filter",
+	);
+
+	assert.ok(criterion);
+	assert.equal(criterion.valueLabel, "On maintenance");
+	assert.deepEqual(criterion.filter, {
+		j: "and",
+		f: {
+			status: {
+				o: "e",
+				v: "on_maintenance",
+			},
+		},
+	});
+});
+
+test("enum search value overrides retain precedence", () => {
+	type StatusRow = {
+		status: string;
+	};
+
+	const [column] = buildSearchColumnOptions<StatusRow>(
+		[
+			{
+				field: "status",
+				headerKey: "status",
+				dataType: "enum" as const,
+				enumOptions: [
+					{
+						value: "at_work",
+						label: "At work",
+					},
+				],
+				searchValueToFilter: (value) => `filter:${String(value)}`,
+				searchValueLabel: () => "Custom chip",
+			},
+		],
+		(key) => key,
+	);
+
+	assert.ok(column);
+	const criterion = buildSearchCriterion(
+		{
+			field: "status",
+			operation: "exact",
+			value: "at_work",
+		},
+		[column],
+		(key) => key,
+	);
+
+	assert.ok(criterion);
+	assert.equal(criterion.valueLabel, "Custom chip");
+	assert.equal(criterion.filter.f.status?.v, "filter:at_work");
+});
+
 test("datetime search uses DatePicker-compatible instants instead of text filters", () => {
 	const value = new Date("2026-09-18T09:35:00.000Z");
 	const column = {
@@ -945,6 +1194,51 @@ test("CollectionGrid uses DatePicker for built-in date and datetime editors", as
 		source,
 		/@update:modelValue="applyGridInlineValue\(data, column, \$event\)"/,
 	);
+});
+
+test("CollectionGrid keeps the custom editor slot ahead of the built-in enum Select", async () => {
+	const source = await readFile(
+		new URL("../src/components/crudGrid/CollectionGrid.vue", import.meta.url),
+		"utf8",
+	);
+	const editorSlotStart = source.indexOf(":name=\"`editor-${column.field}`\"");
+	const editorSlotEnd = source.indexOf("</slot>", editorSlotStart);
+	const enumSelectMatch = source.match(
+		/<Select\s+[\s\S]*?v-else-if="column\.dataType === 'enum'"[\s\S]*?\/>/,
+	);
+
+	assert.ok(editorSlotStart >= 0);
+	assert.ok(editorSlotEnd > editorSlotStart);
+	assert.ok(enumSelectMatch?.index !== undefined);
+	assert.ok(enumSelectMatch.index > editorSlotStart);
+	assert.ok(enumSelectMatch.index < editorSlotEnd);
+	assert.match(enumSelectMatch[0], /v-bind="column\.editorProps"/);
+	assert.match(enumSelectMatch[0], /:options="resolvedEnumOptions\(column\)"/);
+	assert.match(enumSelectMatch[0], /optionValue="value"/);
+	assert.match(enumSelectMatch[0], /optionDisabled="disabled"/);
+	assert.match(
+		enumSelectMatch[0],
+		/@update:modelValue="applyGridInlineValue\(data, column, \$event\)"/,
+	);
+	assert.doesNotMatch(enumSelectMatch[0], /showClear/);
+});
+
+test("GridSearchDialog keeps a custom search component ahead of enum Select", async () => {
+	const source = await readFile(
+		new URL("../src/components/crudGrid/GridSearchDialog.vue", import.meta.url),
+		"utf8",
+	);
+	const customComponentIndex = source.indexOf(
+		"v-if=\"currentColumn.searchComponent\"",
+	);
+	const enumSelectIndex = source.indexOf(
+		"v-else-if=\"currentColumn.dataType === 'enum'\"",
+	);
+
+	assert.ok(customComponentIndex >= 0);
+	assert.ok(enumSelectIndex > customComponentIndex);
+	assert.match(source, /optionDisabled="disabled"/);
+	assert.match(source, /@update:modelValue="setSearchValue"/);
 });
 
 test("CollectionGrid renders delete failures and preserves retryable rows", async () => {

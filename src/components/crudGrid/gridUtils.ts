@@ -1,6 +1,7 @@
 import type {
 	GridCellDataType,
 	GridColumn,
+	GridEnumOption,
 } from "./types";
 
 export type GridDateDataType = Extract<GridCellDataType, "date" | "datetime">;
@@ -28,6 +29,37 @@ export const gridDatePickerProps = (
 		selectionMode: "single",
 		updateModelType: "date",
 	};
+};
+
+export const resolveGridEnumOptionLabel = (
+	option: GridEnumOption,
+	translate?: (key: string) => string,
+): string => {
+	if (option.label !== undefined) {
+		return option.label;
+	}
+
+	if (option.labelKey !== undefined && translate !== undefined) {
+		return translate(option.labelKey);
+	}
+
+	return String(option.value);
+};
+
+export const resolveGridEnumValueLabel = (
+	value: unknown,
+	options?: readonly GridEnumOption[],
+	translate?: (key: string) => string,
+): string => {
+	if (value === null || value === undefined) {
+		return "";
+	}
+
+	const option = options?.find((item) => item.value === value);
+
+	return option !== undefined
+		? resolveGridEnumOptionLabel(option, translate)
+		: String(value);
 };
 
 export const cloneGridRow = <TModel extends object>(
@@ -97,11 +129,16 @@ export const makeChangedModel = <
 export const formatGridValue = <TModel extends object>(
 	row: TModel,
 	column: GridColumn<TModel>,
+	translate?: (key: string) => string,
 ): string => {
 	const value = row[column.field];
 
 	if (column.format) {
 		return column.format(value, row);
+	}
+
+	if (column.dataType === "enum") {
+		return resolveGridEnumValueLabel(value, column.enumOptions, translate);
 	}
 
 	if (value instanceof Date) {
