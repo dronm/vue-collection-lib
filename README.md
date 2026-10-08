@@ -622,6 +622,7 @@ export const categoryReference = defineCrudReference({
 	create: {
 		mode: "dialog",
 		collection: () => categoryCollection,
+		prefill: (text) => ({ name: text.trim() }),
 	},
 });
 ```
@@ -635,8 +636,11 @@ create: {
 	mode: "page",
 	route: { name: "CategoryCreate" },
 	target: "_blank",
+	prefill: (text) => ({ name: text.trim() }),
 },
 ```
+
+Optional `prefill` maps unfinished text typed into the reference input to editable creation defaults. It receives the raw text; blank input and an existing selected label keep the usual defaults. These values apply once, so user corrections remain editable. Page defaults must be JSON-compatible and are passed separately from the route URL.
 
 Pages built with `useCollectionEditPage()` return the created detail automatically when opened through this action. The same page opened normally keeps its usual redirect behavior. Custom form handlers can use `useReferenceCreation()` to complete or cancel the return flow.
 

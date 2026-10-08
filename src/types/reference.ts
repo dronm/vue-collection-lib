@@ -65,6 +65,8 @@ export interface ReferenceSelectAction {
 export interface ReferenceCreateActionBase<TRow extends ReferenceRow = ReferenceRow> {
 	title?: string;
 	disabled?: boolean;
+	/** Map unfinished user input to editable, one-time creation defaults. */
+	prefill?: (text: string) => Record<string, unknown>;
 	/** Adapt the saved detail projection to the row expected by autocomplete. */
 	rowFromDetail?: (detail: object) => TRow;
 	/** Adapt unusual API create-key shapes to the autocomplete key fields. */

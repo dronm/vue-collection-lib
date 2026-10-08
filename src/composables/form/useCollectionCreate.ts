@@ -2,6 +2,7 @@ import {
 	computed,
 	shallowRef,
 	ref,
+	toRaw,
 } from "vue";
 
 import type { CollectionDefinition } from "../../types/collectionDefinition";
@@ -19,12 +20,61 @@ export interface UseCollectionCreateOptions<
 > {
 	collection: CollectionDefinition<TModel, TKey, TNew, TUpd, TDetailModel>;
 	context?: GridCreateContext;
+	/** One-time editable defaults, applied after createRow and before structural context. */
+	defaultValues?: Record<string, unknown>;
 }
 
 export interface CollectionCreateResult<TKey, TDetailModel> {
 	key: TKey;
 	detail: TDetailModel;
 }
+
+const unsafeDefaultFields = new Set(["__proto__", "prototype", "constructor"]);
+
+const copyDefaultValue = (value: unknown, seen = new WeakMap<object, unknown>()): unknown => {
+	if (value === null || typeof value !== "object") {
+		return value;
+	}
+	const raw = toRaw(value);
+	if (seen.has(raw)) {
+		return seen.get(raw);
+	}
+	if (raw instanceof Date) {
+		return new Date(raw.getTime());
+	}
+	if (Array.isArray(raw)) {
+		const copy: unknown[] = [];
+		seen.set(raw, copy);
+		for (const item of raw) {
+			copy.push(copyDefaultValue(item, seen));
+		}
+		return copy;
+	}
+	if (raw instanceof Map) {
+		const copy = new Map<unknown, unknown>();
+		seen.set(raw, copy);
+		for (const [key, item] of raw) {
+			copy.set(copyDefaultValue(key, seen), copyDefaultValue(item, seen));
+		}
+		return copy;
+	}
+	if (raw instanceof Set) {
+		const copy = new Set<unknown>();
+		seen.set(raw, copy);
+		for (const item of raw) {
+			copy.add(copyDefaultValue(item, seen));
+		}
+		return copy;
+	}
+	const copy: Record<string, unknown> = {};
+	seen.set(raw, copy);
+	for (const [field, item] of Object.entries(raw)) {
+		if (!unsafeDefaultFields.has(field)) {
+			copy[field] = copyDefaultValue(item, seen);
+		}
+	}
+	return copy;
+};
 
 /**
  * Creates a reference target without changing the originating form's dirty state.
@@ -63,6 +113,19 @@ export const useCollectionCreate = <
 			}
 
 			const row = collection.createRow(options.context);
+			if (options.defaultValues) {
+				const projectionFields = new Set(collection.columns.map((column) => column.referenceField));
+				for (const column of editableColumns.value) {
+					const field = column.field;
+					if (
+						!unsafeDefaultFields.has(field)
+						&& !projectionFields.has(field)
+						&& Object.hasOwn(options.defaultValues, field)
+					) {
+						(row as Record<string, unknown>)[field] = copyDefaultValue(options.defaultValues[field]);
+					}
+				}
+			}
 			if (options.context?.initialValues) {
 				Object.assign(row, options.context.initialValues);
 			}

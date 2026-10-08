@@ -63,8 +63,10 @@ export const useCollectionEditPage = <
 	const model = ref(options.createModel()) as Ref<TModel>;
 	const errors = useFormErrors();
 	const referenceCreation = useReferenceCreation();
+	const referenceCreationSession = referenceCreation.creationToken !== null;
 	const createdKey = shallowRef<TKey | null>(null);
 	const completingReferenceCreation = ref(false);
+	let referenceCreateLoaded = false;
 	const isCreateRoute = computed(() => route.name === options.createRouteName);
 	const mode = computed<CollectionFormMode>(() => {
 		if (!isCreateRoute.value) {
@@ -78,7 +80,7 @@ export const useCollectionEditPage = <
 	const key = computed(() => options.keyFromRoute(route));
 
 	const goBack = async (): Promise<void> => {
-		if (referenceCreation.creationMode.value) {
+		if (referenceCreationSession) {
 			referenceCreation.cancel();
 			return;
 		}
@@ -116,7 +118,7 @@ export const useCollectionEditPage = <
 			if (
 				result.operation === "create"
 				&& result.key !== null
-				&& referenceCreation.creationMode.value
+				&& referenceCreationSession
 			) {
 				createdKey.value = result.key;
 				await returnCreatedReference(result.key);
@@ -164,7 +166,19 @@ export const useCollectionEditPage = <
 				}
 			}
 
-			model.value = options.createModel();
+			if (referenceCreationSession && mode.value === "create") {
+				if (!referenceCreateLoaded) {
+					const fields = options.fields.flatMap((field) => {
+						return typeof field === "string"
+							? [field]
+							: field.create === false ? [] : [field.detailField];
+					});
+					model.value = referenceCreation.applyDefaultValues(options.createModel(), fields);
+					referenceCreateLoaded = true;
+				}
+			} else {
+				model.value = options.createModel();
+			}
 			submitController.setInitialModel(null);
 		} catch (err: unknown) {
 			errors.setFromError(err);
@@ -178,7 +192,7 @@ export const useCollectionEditPage = <
 			return;
 		}
 
-		if (createdKey.value !== null && referenceCreation.creationMode.value) {
+		if (createdKey.value !== null) {
 			errors.clear();
 			try {
 				await returnCreatedReference(createdKey.value);

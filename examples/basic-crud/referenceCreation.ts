@@ -78,6 +78,7 @@ export const categoryDialogReference = defineCrudReference<CategoryRow, Category
 		mode: "dialog",
 		collection: () => categoryCollection,
 		title: "Create category",
+		prefill: (text) => ({ name: text.trim() }),
 	},
 });
 
@@ -94,6 +95,7 @@ export const categoryPageReference = defineCrudReference<CategoryRow, CategoryKe
 		mode: "page",
 		route: { name: "CategoryCreate" },
 		target: "_blank",
+		prefill: (text) => ({ name: text.trim() }),
 	},
 });
 

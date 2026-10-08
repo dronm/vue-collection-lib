@@ -174,6 +174,7 @@ export const categoryReference = defineCrudReference<Category, CategoryKey>({
 		mode: "dialog",
 		collection: () => categoryCollection,
 		title: "Create category",
+		prefill: (text) => ({ name: text.trim() }),
 	},
 });
 
@@ -250,6 +251,7 @@ export const categoryReference = defineCrudReference<Category, CategoryKey>({
 		mode: "page",
 		route: { name: "CategoryCreate" },
 		target: "_blank",
+		prefill: (text) => ({ name: text.trim() }),
 	},
 });
 ```
@@ -275,9 +277,38 @@ create: {
 
 The returned reference keys must match the saved key from `api.create`. By default, a scalar saved key maps to the reference's single key field, while object keys use the configured key-field names. If your backend returns another shape, add `keysFromCreated: (key: unknown) => ReferenceKeys` to adapt it before validation. This is separate from `rowFromDetail`, which adapts the displayed row.
 
+### Prefilling from typed search text
+
+Both creation modes accept an optional `prefill` callback:
+
+```ts
+prefill: (text) => ({ name: text.trim() }),
+```
+
+The callback receives the raw, unselected text typed into the reference input. For example, typing `New category` and clicking Create new opens a draft whose name is already `New category`. The callback runs only for non-whitespace text. A blank input or the description of an existing selected record keeps the ordinary creation defaults; there is no automatic assumption that `searchField` is also the desired creation field.
+
+Clearing the reference or selecting an existing record resets the text used for prefilling. PrimeVue's `forceSelection` may clear an unmatched input on blur; the library preserves that typed text for Create new. Cancelling creation retains the text for another attempt.
+
+In a generated dialog, defaults are applied once after `createRow` and before the fixed `context.initialValues`. Only creation-editable column fields are accepted, and sibling reference read projections are excluded. A user can correct prefilled values before saving, and retries preserve those corrections. Like values initialized by `createRow`, these defaults do not invoke `normalizeValue` or `setValue`; those hooks run when the user edits a field. Initialize independent defaults in `createRow`, return related editable defaults together from `prefill`, and calculate derived payload values in `createModel` or `validateCreate`.
+
+Page defaults are transferred through token-scoped browser storage, without putting the text into the route URL. Return JSON-compatible values from a page-mode callback. `useCollectionEditPage()` applies them once to a fresh creation model and preserves later edits; ordinary create pages, edit pages, and copy pages keep their usual behavior.
+
+For a custom page, call `applyDefaultValues` after constructing the fresh model. It consumes the transferred defaults once and updates existing own fields. An optional list of allowed field names authorizes fields omitted from the factory. Unknown fields are ignored; page prefill mappings containing reserved prototype keys are rejected before opening the page.
+
+```ts
+const referenceCreation = useReferenceCreation();
+const form = ref({ name: "" });
+
+if (referenceCreation.creationMode.value) {
+	referenceCreation.applyDefaultValues(form.value);
+}
+```
+
+For manual mapping, `defaultValues` exposes a stable read-only snapshot, while `consumeDefaultValues()` retrieves and consumes it once. Both may be `undefined` when no defaults were transferred. Apply defaults only to a fresh create model, and preserve the user's draft during reload or retry.
+
 ### Custom form handlers
 
-Forms that do not use `useCollectionEditPage()` can call `useReferenceCreation()`. Its `complete(key, row)` returns `false` outside creation mode, so an ordinary page can retain its existing redirect. In creation mode it publishes the saved row and closes the tab. Its `cancel()` follows the same rule for cancellation.
+Forms that do not use `useCollectionEditPage()` can call `useReferenceCreation()`. Its `complete(key, row)` returns `false` on an ordinary page without a creation token, so that page can retain its existing redirect. In creation mode it publishes the saved row and closes the tab. Completion is bound to the token present when the hook starts; changing or removing that token prevents returning the record to another request. Its `cancel()` closes an originally launched creation tab and returns `false` for an ordinary page.
 
 Preserve the created key before loading detail or completing the return flow. This prevents a later retry from creating the same record twice. For example, inside the creation page's `<script setup lang="ts">`:
 
@@ -294,6 +325,9 @@ const router = useRouter();
 const referenceCreation = useReferenceCreation();
 const errors = useFormErrors();
 const form = ref({ name: "" });
+if (referenceCreation.creationMode.value) {
+	referenceCreation.applyDefaultValues(form.value);
+}
 const createdKey = ref<{ id: number } | null>(null);
 const submitting = ref(false);
 

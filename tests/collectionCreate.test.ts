@@ -113,6 +113,218 @@ test("generated creation uses fresh defaults, creation fields and forced context
 	assert.equal(createRow().id, 0);
 });
 
+test("typed-text defaults seed once and corrections are submitted without reapplying the seed", async () => {
+	let payload: Payload | undefined;
+	let normalizeCalls = 0;
+	let hookCalls = 0;
+	const definition = defineCollection();
+	const nameColumn = definition.columns[1]!;
+	nameColumn.normalizeValue = (value) => {
+		normalizeCalls += 1;
+		return String(value).trim();
+	};
+	nameColumn.setValue = () => {
+		hookCalls += 1;
+	};
+	definition.api.create = async (model) => {
+		payload = model;
+		return { id: 9 };
+	};
+	const defaultValues = { name: " Typed text " };
+	const creator = useCollectionCreate({ collection: definition, defaultValues });
+
+	assert.equal(creator.draft.name, " Typed text ");
+	assert.equal(normalizeCalls, 0);
+	assert.equal(hookCalls, 0);
+	await creator.updateValue(nameColumn, " Corrected name ");
+	defaultValues.name = "Later caller change";
+	assert.ok(await creator.submit());
+	assert.equal(payload?.name, "Corrected name");
+	assert.equal(creator.draft.name, "Corrected name");
+	assert.equal(normalizeCalls, 1);
+	assert.equal(hookCalls, 1);
+	assert.equal(defaultValues.name, "Later caller change");
+});
+
+test("omitted and empty typed-text defaults preserve collection factory defaults", () => {
+	for (const defaultValues of [undefined, {}]) {
+		const creator = useCollectionCreate({ collection: defineCollection(), defaultValues });
+		assert.deepEqual(creator.draft, createRow());
+	}
+});
+
+test("structural context takes precedence over typed-text defaults", async () => {
+	let payload: Payload | undefined;
+	const definition = defineCollection();
+	definition.api.create = async (model) => {
+		payload = model;
+		return { id: 9 };
+	};
+	const defaultValues = Object.freeze({ name: "Typed", createOnly: "Typed create value" });
+	const creator = useCollectionCreate({
+		collection: definition,
+		defaultValues,
+		context: { initialValues: { name: "Context name", parent_id: 12 } },
+	});
+	assert.equal(creator.draft.name, "Context name");
+	assert.equal(creator.draft.createOnly, "Typed create value");
+	assert.equal(creator.draft.parent_id, 12);
+	assert.ok(await creator.submit());
+	assert.equal(payload?.name, "Context name");
+	assert.equal(payload?.parent_id, 12);
+	assert.equal(defaultValues.name, "Typed");
+});
+
+test("creation-editable metadata allows optional draft fields to receive defaults", () => {
+	const definition = defineCollection({
+		createRow: () => {
+			const row = createRow();
+			delete (row as Partial<Row>).name;
+			return row;
+		},
+	});
+	const creator = useCollectionCreate({ collection: definition, defaultValues: { name: "Optional name" } });
+	assert.equal(creator.draft.name, "Optional name");
+	assert.equal(Object.hasOwn(creator.draft, "name"), true);
+});
+
+test("creation defaults copy nested values and exclude hidden fields and reference projections", async () => {
+	interface DefaultRow {
+		id: number;
+		name: string;
+		owner_id: number;
+		owner_ref: { keys: { id: number }; descr: string } | null;
+		settings: { tags: string[]; date: Date; nested: { label: string } };
+	}
+	let payload: Record<string, unknown> | undefined;
+	const definition: CollectionDefinition<DefaultRow, number, Record<string, unknown>, Record<string, unknown>> = {
+		titleKey: "Items.title",
+		dataKey: "id",
+		getKey: (row) => row.id,
+		createRow: () => ({
+			id: 0,
+			name: "Factory name",
+			owner_id: 0,
+			owner_ref: null,
+			settings: { tags: [], date: new Date(0), nested: { label: "Factory label" } },
+		}),
+		columns: [
+			{ field: "name", headerKey: "name", editable: true },
+			{ field: "owner_id", headerKey: "owner", editable: true, referenceField: "owner_ref" },
+			{ field: "settings", headerKey: "settings", createEditable: true },
+			{ field: "id", headerKey: "id" },
+			{ field: "owner_ref", headerKey: "owner_ref" },
+		],
+		api: {
+			list: async () => ({ rows: [], agg: { tot_count: 0 } }),
+			create: async (model) => {
+				payload = model;
+				return 4;
+			},
+			detail: async (id) => ({ ...definition.createRow!(), id }),
+		},
+	};
+	const defaultValues = {
+		name: "Typed",
+		id: 99,
+		owner_ref: { keys: { id: 99 }, descr: "Injected projection" },
+		settings: { tags: ["seed"], date: new Date("2026-10-08"), nested: { label: "Seed" } },
+		unknown_field: "Unknown",
+	};
+	const creator = useCollectionCreate({ collection: definition, defaultValues });
+	creator.draft.settings.tags.push("edited");
+	creator.draft.settings.nested.label = "Edited";
+	creator.draft.settings.date.setFullYear(2027);
+
+	assert.deepEqual(defaultValues.settings.tags, ["seed"]);
+	assert.equal(defaultValues.settings.nested.label, "Seed");
+	assert.equal(defaultValues.settings.date.getFullYear(), 2026);
+	assert.equal(creator.draft.id, 0);
+	assert.equal(creator.draft.owner_ref, null);
+	assert.equal(Object.hasOwn(creator.draft, "unknown_field"), false);
+	const editableProjectionCreator = useCollectionCreate({
+		collection: {
+			...definition,
+			columns: definition.columns.map((column) => {
+				return column.field === "owner_ref" ? { ...column, createEditable: true } : column;
+			}),
+		},
+		defaultValues,
+	});
+	assert.equal(editableProjectionCreator.draft.owner_ref, null);
+	assert.ok(await creator.submit());
+	assert.equal(Object.hasOwn(payload!, "owner_ref"), false);
+	assert.equal(Object.hasOwn(payload!, "id"), false);
+	assert.equal(Object.hasOwn(payload!, "unknown_field"), false);
+});
+
+test("default seeding ignores inherited, unknown and prototype-sensitive properties", () => {
+	const definition = defineCollection();
+	const defaults = JSON.parse('{"name":"Accepted","__proto__":{"polluted":true},"constructor":"Injected","prototype":"Injected","hidden_field":"Injected"}') as Record<string, unknown>;
+	const creator = useCollectionCreate({ collection: definition, defaultValues: defaults });
+	assert.equal(creator.draft.name, "Accepted");
+	assert.equal(Object.hasOwn(creator.draft, "constructor"), false);
+	assert.equal(Object.hasOwn(creator.draft, "prototype"), false);
+	assert.equal(Object.hasOwn(creator.draft, "__proto__"), false);
+	assert.equal(Object.hasOwn(creator.draft, "hidden_field"), false);
+	assert.equal((creator.draft as unknown as Record<string, unknown>).polluted, undefined);
+	assert.equal(Object.hasOwn(Object.prototype, "polluted"), false);
+
+	const inherited = Object.create({ name: "Inherited" }) as Record<string, unknown>;
+	const inheritedCreator = useCollectionCreate({ collection: defineCollection(), defaultValues: inherited });
+	assert.equal(inheritedCreator.draft.name, "Draft");
+
+	const prototypeDefinition: CollectionDefinition<Record<string, unknown>, number, Record<string, unknown>, Record<string, unknown>> = {
+		titleKey: "Prototype.title",
+		dataKey: "id",
+		getKey: () => 0,
+		createRow: () => JSON.parse('{"id":0,"constructor":"Factory","prototype":"Factory","__proto__":{"safe":true}}') as Record<string, unknown>,
+		columns: [
+			{ field: "constructor", headerKey: "constructor", createEditable: true },
+			{ field: "prototype", headerKey: "prototype", createEditable: true },
+			{ field: "__proto__", headerKey: "__proto__", createEditable: true },
+		],
+		api: {
+			list: async () => ({ rows: [], agg: { tot_count: 0 } }),
+			create: async () => 0,
+			detail: async () => ({}),
+		},
+	};
+	const prototypeCreator = useCollectionCreate({ collection: prototypeDefinition, defaultValues: defaults });
+	assert.equal(prototypeCreator.draft.constructor, "Factory");
+	assert.equal(prototypeCreator.draft.prototype, "Factory");
+	assert.deepEqual(prototypeCreator.draft.__proto__, { safe: true });
+});
+
+test("edited defaults remain intact when saved detail loading is retried", async () => {
+	let detailCalls = 0;
+	let createCalls = 0;
+	let payload: Payload | undefined;
+	const definition = defineCollection();
+	definition.api.create = async (model) => {
+		createCalls += 1;
+		payload = model;
+		return { id: 9 };
+	};
+	definition.api.detail = async (key) => {
+		detailCalls += 1;
+		if (detailCalls === 1) {
+			throw new Error("Detail failed");
+		}
+		return savedDetail(key);
+	};
+	const defaultValues = { name: "Typed name" };
+	const creator = useCollectionCreate({ collection: definition, defaultValues });
+	await creator.updateValue(definition.columns[1]!, "Corrected name");
+	assert.equal(await creator.submit(), null);
+	defaultValues.name = "Changed callback value";
+	assert.ok(await creator.submit());
+	assert.equal(creator.draft.name, "Corrected name");
+	assert.equal(payload?.name, "Corrected name");
+	assert.equal(createCalls, 1);
+	assert.equal(detailCalls, 2);
+});
+
 test("custom create mapping runs before schema and asynchronous custom validation", async () => {
 	const order: string[] = [];
 	let payload: Payload | undefined;

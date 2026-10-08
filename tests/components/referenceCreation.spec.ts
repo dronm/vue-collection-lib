@@ -17,6 +17,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { createMemoryHistory, createRouter } from "vue-router";
 import PrimeVue from "primevue/config";
+import AutoComplete from "primevue/autocomplete";
 import * as v from "valibot";
 
 import CollectionDirtyGuard from "../../src/components/form/CollectionDirtyGuard.vue";
@@ -27,7 +28,7 @@ import ReferenceKeyInput from "../../src/components/reference/ReferenceKeyInput.
 import { applyGridInlineValue } from "../../src/components/crudGrid/inlineEditing";
 import type { GridColumn } from "../../src/components/crudGrid/types";
 import type { CollectionDefinition } from "../../src/types/collectionDefinition";
-import type { ReferenceCreateAction } from "../../src/types/reference";
+import type { ReferenceCreateAction, ReferenceValue } from "../../src/types/reference";
 import { defineCrudReference } from "../../src/utils/crudReference";
 import {
 	makeReferenceCreationMessage,
@@ -36,6 +37,7 @@ import {
 } from "../../src/utils/referenceCreation";
 import { collectionFormSubmitSuccessEvent } from "../../src/composables/form/events";
 import en from "../../src/locales/en";
+import { useReferenceCreation } from "../../src/composables/useReferenceCreation";
 
 interface CategoryRow {
 	id: number;
@@ -158,6 +160,7 @@ const DialogStub = defineComponent({
 const mountSubject = async (
 	component: Component,
 	props: Record<string, unknown> = {},
+	options: { realAutocomplete?: boolean; initialRoute?: string } = {},
 ) => {
 	const router = createRouter({
 		history: createMemoryHistory(),
@@ -167,7 +170,7 @@ const mountSubject = async (
 			{ path: "/other", name: "Other", component: { render: () => h("div") } },
 		],
 	});
-	await router.push("/parent");
+	await router.push(options.initialRoute ?? "/parent");
 	await router.isReady();
 	const i18n = createI18n({
 		legacy: false,
@@ -188,9 +191,9 @@ const mountSubject = async (
 		global: {
 			plugins: [router, i18n, [PrimeVue, { unstyled: true }]],
 			stubs: {
-				AutoComplete: AutoCompleteStub,
+				AutoComplete: options.realAutocomplete ? false : AutoCompleteStub,
 				Dialog: DialogStub,
-				InputText: inputControl("InputText"),
+				InputText: options.realAutocomplete ? false : inputControl("InputText"),
 				InputNumber: inputControl("InputNumber", "number"),
 				Checkbox: inputControl("Checkbox", "checkbox"),
 				DatePicker: inputControl("DatePicker"),
@@ -294,11 +297,41 @@ const submitCreation = async () => {
 	await flushPromises();
 };
 
+const typedReferenceHost = (fixture: ReturnType<typeof categoryFixture>, initialValue: number | null = null) => {
+	const selected = reactive<{ category_id: number | null }>({ category_id: initialValue });
+	fixture.reference.autocomplete.delay = 0;
+	const Host = defineComponent({
+		setup: () => () => h(ReferenceKeyInput, {
+			reference: fixture.reference,
+			modelValue: selected.category_id,
+			projectedValue: selected.category_id === 1 ? oldReference : undefined,
+			"onUpdate:modelValue": (value: number | null) => {
+				selected.category_id = value;
+			},
+		}),
+	});
+	return { Host, selected };
+};
+
+const typeAndBlur = async (wrapper: VueWrapper, text: string) => {
+	const input = wrapper.find(".crud-reference-input-field input");
+	(input.element as HTMLInputElement).focus();
+	(input.element as HTMLInputElement).value = text;
+	await input.trigger("input");
+	await flushPromises();
+	await input.trigger("keydown", { key: "Tab" });
+	await input.trigger("change");
+	(input.element as HTMLInputElement).blur();
+	await flushPromises();
+	return input;
+};
+
 afterEach(() => {
 	for (const wrapper of mounted.splice(0)) {
 		wrapper.unmount();
 	}
 	document.body.innerHTML = "";
+	window.sessionStorage.clear();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
@@ -870,5 +903,226 @@ describe("reference creation page transport", () => {
 			data: makeReferenceCreationMessage(token, { id: 42 }, categoryFixture().saved),
 		}));
 		expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+	});
+});
+
+describe("typed reference creation prefill", () => {
+	it.each(["null", "keyless"])("discards remembered genuine typing when the parent externally replaces its model with %s", async (replacement) => {
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text }));
+		fixture.createAction.prefill = prefill;
+		const parent = reactive<{ value: ReferenceValue<CategoryKey> | null }>({ value: null });
+		const Host = defineComponent({
+			setup: () => () => h(ReferenceInput, {
+				autocomplete: { ...autocomplete, forceSelection: true, delay: 0 },
+				modelValue: parent.value,
+				createAction: fixture.createAction,
+				"onUpdate:modelValue": (value: ReferenceValue<CategoryKey> | null) => {
+					parent.value = value;
+				},
+			}),
+		});
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		const input = wrapper.find(".crud-reference-input-field input");
+		(input.element as HTMLInputElement).focus();
+		(input.element as HTMLInputElement).value = "Earlier genuine typing";
+		await input.trigger("input");
+		await flushPromises();
+		expect(parent.value).toEqual({ keys: null, descr: "Earlier genuine typing" });
+		parent.value = replacement === "null" ? null : { keys: null, descr: "External draft replacement" };
+		await flushPromises();
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill).not.toHaveBeenCalled();
+		expect((dialog().querySelector('input[id$="-name"]') as HTMLInputElement).value).toBe("");
+	});
+
+	it("prefills from genuine unmatched input after forceSelection clears it and allows correcting the creation draft", async () => {
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text.trim() }));
+		fixture.createAction.prefill = prefill;
+		const { Host, selected } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		expect(wrapper.findComponent(AutoComplete).exists()).toBe(true);
+		const input = await typeAndBlur(wrapper, "  Newly typed category  ");
+		expect(selected.category_id).toBeNull();
+		expect((input.element as HTMLInputElement).value).toBe("");
+		(creationButton(wrapper).element as HTMLButtonElement).focus();
+		(creationButton(wrapper).element as HTMLButtonElement).click();
+		await flushPromises();
+		expect(prefill).toHaveBeenCalledExactlyOnceWith("  Newly typed category  ");
+		const form = wrapper.findComponent(CollectionCreateForm);
+		expect((form.find('input[id$="-name"]').element as HTMLInputElement).value).toBe("Newly typed category");
+		await form.find('input[id$="-name"]').setValue("Corrected name");
+		await flushPromises();
+		await submitCreation();
+		expect(fixture.create).toHaveBeenCalledWith(expect.objectContaining({ name: "CORRECTED NAME" }));
+		expect(selected.category_id).toBe(42);
+	});
+
+	it("retains typed defaults after cancelling a generated dialog", async () => {
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text }));
+		fixture.createAction.prefill = prefill;
+		const { Host } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		await typeAndBlur(wrapper, "Keep this pending name");
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		const cancel = Array.from(dialog().querySelectorAll("button")).find((button) => button.textContent === "Cancel")!;
+		cancel.click();
+		await flushPromises();
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill.mock.calls).toEqual([["Keep this pending name"], ["Keep this pending name"]]);
+		expect((dialog().querySelector('input[id$="-name"]') as HTMLInputElement).value).toBe("Keep this pending name");
+		expect(fixture.create).not.toHaveBeenCalled();
+	});
+
+	it("skips prefill for whitespace and an already selected existing reference", async () => {
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text }));
+		fixture.createAction.prefill = prefill;
+		const first = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(first.Host, {}, { realAutocomplete: true });
+		await typeAndBlur(wrapper, "Erase this earlier draft");
+		await typeAndBlur(wrapper, "   ");
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill).not.toHaveBeenCalled();
+		expect((dialog().querySelector('input[id$="-name"]') as HTMLInputElement).value).toBe("");
+		Array.from(dialog().querySelectorAll("button")).find((button) => button.textContent === "Cancel")!.click();
+		await flushPromises();
+		wrapper.unmount();
+		mounted.splice(mounted.indexOf(wrapper), 1);
+		const existing = typedReferenceHost(fixture, 1);
+		const second = await mountSubject(existing.Host, {}, { realAutocomplete: true });
+		await creationButton(second.wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill).not.toHaveBeenCalled();
+		expect((dialog().querySelector('input[id$="-name"]') as HTMLInputElement).value).toBe("");
+	});
+
+	it("discards the remembered text after explicit Clear even when forceSelection already cleared the visible input", async () => {
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text }));
+		fixture.createAction.prefill = prefill;
+		const { Host } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		await typeAndBlur(wrapper, "Discard this name");
+		const clear = wrapper.find('button[title="Clear"]');
+		expect((clear.element as HTMLButtonElement).disabled).toBe(false);
+		await clear.trigger("click");
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill).not.toHaveBeenCalled();
+		expect((dialog().querySelector('input[id$="-name"]') as HTMLInputElement).value).toBe("");
+	});
+
+	it("discards remembered text after an existing suggestion is selected", async () => {
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text }));
+		fixture.createAction.prefill = prefill;
+		const { Host, selected } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		await typeAndBlur(wrapper, "Do not reuse this after selecting");
+		const option = { ...oldReference, __row: { ...fixture.saved, id: 1, name: oldReference.descr } };
+		const control = wrapper.findComponent(AutoComplete);
+		control.vm.$emit("update:modelValue", option);
+		control.vm.$emit("item-select", { value: option });
+		await flushPromises();
+		expect(selected.category_id).toBe(1);
+		// Resetting the parent draft must not revive text typed before a successful
+		// selection; only genuine new typing should supply a later creation seed.
+		selected.category_id = null;
+		await flushPromises();
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill).not.toHaveBeenCalled();
+		expect((dialog().querySelector('input[id$="-name"]') as HTMLInputElement).value).toBe("");
+	});
+
+	it("sends page defaults before opening and applies them once to an editable page model", async () => {
+		vi.stubGlobal("BroadcastChannel", undefined);
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text }));
+		fixture.reference.create = { mode: "page", route: { name: "CategoryCreate" }, prefill };
+		let childStorage: [string, string][] = [];
+		const open = vi.spyOn(window, "open").mockImplementation(() => {
+			childStorage = Object.entries(window.sessionStorage);
+			return { closed: false } as Window;
+		});
+		const { Host } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		await typeAndBlur(wrapper, "Typed page category");
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill).toHaveBeenCalledExactlyOnceWith("Typed page category");
+		expect(open).toHaveBeenCalledTimes(1);
+		expect(childStorage.length).toBeGreaterThan(0);
+		const url = new URL(String(open.mock.calls[0]![0]), window.location.origin);
+		expect(url.href).not.toContain("Typed%20page%20category");
+		expect(url.href).not.toContain("Typed+page+category");
+		// An opener-created tab gets a cloned sessionStorage before window.open
+		// returns; restore that clone to emulate the child tab in this jsdom window.
+		window.sessionStorage.clear();
+		for (const [key, value] of childStorage) {
+			window.sessionStorage.setItem(key, value);
+		}
+		const model = reactive({ name: "", code: "PAGE_DEFAULT" });
+		let receivedDefaults: Readonly<Record<string, unknown>> | undefined;
+		let applyAgain!: () => void;
+		const TargetPage = defineComponent({
+			setup: () => {
+				const creation = useReferenceCreation();
+				receivedDefaults = creation.defaultValues;
+				creation.applyDefaultValues(model);
+				applyAgain = () => creation.applyDefaultValues(model);
+				return () => h("input", {
+					"data-test": "page-name",
+					value: model.name,
+					onInput: (event: Event) => {
+						model.name = (event.target as HTMLInputElement).value;
+					},
+				});
+			},
+		});
+		const child = await mountSubject(TargetPage, {}, { initialRoute: `${url.pathname}${url.search}${url.hash}` });
+		expect(model.name).toBe("Typed page category");
+		expect(model.code).toBe("PAGE_DEFAULT");
+		expect(receivedDefaults).toEqual({ name: "Typed page category" });
+		await child.wrapper.find('[data-test="page-name"]').setValue("Corrected page name");
+		applyAgain();
+		expect(model.name).toBe("Corrected page name");
+	});
+
+	it.each(["dialog", "page"])("shows a %s prefill failure without opening or submitting, and retries using the remembered input", async (mode) => {
+		vi.stubGlobal("BroadcastChannel", undefined);
+		const open = vi.spyOn(window, "open").mockReturnValue({ closed: false } as Window);
+		const fixture = categoryFixture();
+		const prefill = vi.fn((text: string) => ({ name: text }));
+		prefill.mockImplementationOnce(() => {
+			throw new Error("Cannot map the typed category");
+		});
+		fixture.reference.create = mode === "dialog"
+			? { ...fixture.createAction, prefill }
+			: { mode: "page", route: { name: "CategoryCreate" }, prefill };
+		const { Host } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		await typeAndBlur(wrapper, "Recover this name");
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(wrapper.text()).toContain("Cannot map the typed category");
+		expect(document.querySelector('[role="dialog"]')).toBeNull();
+		expect(open).not.toHaveBeenCalled();
+		expect(fixture.create).not.toHaveBeenCalled();
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		expect(prefill.mock.calls).toEqual([["Recover this name"], ["Recover this name"]]);
+		if (mode === "dialog") {
+			expect((dialog().querySelector('input[id$="-name"]') as HTMLInputElement).value).toBe("Recover this name");
+		} else {
+			expect(open).toHaveBeenCalledTimes(1);
+		}
 	});
 });

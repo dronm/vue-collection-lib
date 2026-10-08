@@ -41,6 +41,10 @@ import {
 	REFERENCE_CREATION_QUERY_PARAM,
 	referenceCreationChannelName,
 } from "../../utils/referenceCreation";
+import {
+	clearReferenceCreationDefaults,
+	prepareReferenceCreationDefaults,
+} from "../../utils/referenceCreationDefaults";
 import type { CollectionDefinition } from "../../types/collectionDefinition";
 import type { GridCreateContext } from "../crudGrid/types";
 import type { FormErrorsController } from "../../types/formErrors";
@@ -116,6 +120,21 @@ const creationVisible = ref(false);
 const creationPending = ref(false);
 const creationCollection = shallowRef<CollectionDefinition<any, any, any, any, any> | null>(null);
 const creationContext = shallowRef<GridCreateContext | undefined>(undefined);
+const creationDefaultValues = shallowRef<Record<string, unknown> | undefined>(undefined);
+const typedDescription = ref("");
+const restoredDescription = shallowRef<string | null>(null);
+let pendingModelEcho: { keys: string; description: string | undefined } | undefined;
+const inputModelValue = computed(() => {
+	return restoredDescription.value === null
+		? props.modelValue
+		: { keys: null, descr: restoredDescription.value };
+});
+const canClear = computed(() => {
+	return !props.disabled && Boolean(
+		props.modelValue
+		|| (props.createAction?.prefill && typedDescription.value.trim() !== ""),
+	);
+});
 const activeCreateAction = shallowRef<ReferenceCreateAction<TRow> | null>(null);
 const receivedCreatedDetail = shallowRef<{ row: object; key: unknown } | null>(null);
 const creationForm = ref<{
@@ -222,15 +241,58 @@ const stripOption = (
 	return value;
 };
 
+const resetTypedDescription = (): void => {
+	typedDescription.value = "";
+	restoredDescription.value = null;
+};
+
+const captureTypedDescription = (event: Event): void => {
+	const input = event.target;
+	if (
+		!(input instanceof HTMLInputElement)
+		|| !input.closest(".crud-reference-input-autocomplete")
+	) {
+		return;
+	}
+	// Capture before AutoComplete can reject unmatched input on change. A later
+	// null model is also emitted by forceSelection and must not erase this text.
+	typedDescription.value = input.value;
+	restoredDescription.value = null;
+	abandonCreatedSelection();
+};
+
+const restoreTypedDescription = (): void => {
+	if (
+		props.createAction?.prefill
+		&& typedDescription.value.trim() !== ""
+		&& !props.modelValue?.keys
+	) {
+		restoredDescription.value = typedDescription.value;
+	}
+};
+
+const emitModelValue = (value: ReferenceValue<TKeys> | null): void => {
+	pendingModelEcho = {
+		keys: JSON.stringify(value?.keys ?? null),
+		description: value?.descr,
+	};
+	emit("update:modelValue", value);
+};
+
 const updateModelValue = (value: unknown): void => {
 	abandonCreatedSelection();
+	restoredDescription.value = null;
+	if (value === "") {
+		resetTypedDescription();
+	}
 	if (value === null || value === undefined || value === "") {
-		emit("update:modelValue", null);
+		emitModelValue(null);
 		return;
 	}
 
 	if (typeof value === "string") {
-		emit("update:modelValue", {
+		typedDescription.value = value;
+		emitModelValue({
 			keys: null,
 			descr: value,
 		});
@@ -239,11 +301,11 @@ const updateModelValue = (value: unknown): void => {
 
 	if (isReferenceValue<TKeys>(value)) {
 		if ("__row" in value) {
-			emit("update:modelValue", stripOption(value as ReferenceOption));
+			emitModelValue(stripOption(value as ReferenceOption));
 			return;
 		}
 
-		emit("update:modelValue", value);
+		emitModelValue(value);
 	}
 };
 
@@ -251,8 +313,9 @@ const selectOption = (event: { value: ReferenceOption; fromCreation?: boolean })
 	if (!event.fromCreation) {
 		abandonCreatedSelection();
 	}
+	resetTypedDescription();
 	const selected = stripOption(event.value);
-	emit("update:modelValue", selected);
+	emitModelValue(selected);
 	emit("select", selected, event.value.__row);
 	rootEl.value?.dispatchEvent(new CustomEvent(collectionReferenceChangeEvent, {
 		bubbles: true,
@@ -395,6 +458,9 @@ let creationOriginKeys: string | null = null;
 const closeCreationSession = (): void => {
 	creationChannel?.close();
 	creationChannel = null;
+	if (creationToken !== null) {
+		clearReferenceCreationDefaults(creationToken);
+	}
 	creationToken = null;
 	creationOriginKeys = null;
 	creationPending.value = false;
@@ -499,6 +565,19 @@ const requestCreate = (): void => {
 	activeCreateAction.value = props.createAction;
 	const action = props.createAction;
 	try {
+		creationDefaultValues.value = undefined;
+		if (action.prefill && typedDescription.value.trim() !== "") {
+			const values = action.prefill(typedDescription.value);
+			if (
+				typeof values !== "object"
+				|| values === null
+				|| Array.isArray(values)
+				|| ![Object.prototype, null].includes(Object.getPrototypeOf(values))
+			) {
+				throw new Error(t("Reference.create.invalidPrefill"));
+			}
+			creationDefaultValues.value = values;
+		}
 		if (action.mode === "dialog") {
 			creationCollection.value = action.collection();
 			creationContext.value = typeof action.context === "function"
@@ -514,6 +593,9 @@ const requestCreate = (): void => {
 		const routeValue = typeof action.route === "function" ? action.route() : action.route;
 		const resolved = router.resolve(routeValue);
 		creationToken = createReferenceCreationToken();
+		if (creationDefaultValues.value !== undefined) {
+			prepareReferenceCreationDefaults(creationToken, creationDefaultValues.value);
+		}
 		const href = router.resolve({
 			path: resolved.path,
 			query: {
@@ -545,11 +627,13 @@ const requestCreate = (): void => {
 		creationWindowPoll = setInterval(() => {
 			if (popup.closed) {
 				closeCreationSession();
+				restoreTypedDescription();
 			}
 		}, 500);
 	} catch (err: unknown) {
 		closeCreationSession();
 		creationError.value = errorText(err);
+		restoreTypedDescription();
 	}
 };
 
@@ -557,12 +641,24 @@ watch(creationVisible, (visible) => {
 	if (!visible) {
 		creationCollection.value = null;
 		creationContext.value = undefined;
+		creationDefaultValues.value = undefined;
+		restoreTypedDescription();
 	}
 });
 
 watch(() => JSON.stringify(props.modelValue?.keys ?? null), (keys) => {
 	if (creationPending.value && keys !== creationOriginKeys) {
 		abandonCreatedSelection();
+	}
+});
+
+watch(() => [props.modelValue, props.modelValue?.descr, JSON.stringify(props.modelValue?.keys ?? null)] as const, ([value]) => {
+	const ownUpdate = pendingModelEcho !== undefined
+		&& pendingModelEcho.keys === JSON.stringify(value?.keys ?? null)
+		&& pendingModelEcho.description === value?.descr;
+	pendingModelEcho = undefined;
+	if (value?.keys || !ownUpdate) {
+		resetTypedDescription();
 	}
 });
 
@@ -573,7 +669,8 @@ onBeforeUnmount(() => {
 
 const clearValue = (): void => {
 	abandonCreatedSelection();
-	emit("update:modelValue", null);
+	resetTypedDescription();
+	emitModelValue(null);
 	emit("clear");
 };
 </script>
@@ -594,11 +691,12 @@ const clearValue = (): void => {
 			<div
 				class="crud-reference-input-field"
 				:class="{ 'crud-reference-input-field--with-prefix': Boolean(slots['input-prefix']) }"
+				@input.capture="captureTypedDescription"
 			>
 				<AutoComplete
 					fluid
 					:inputId="props.id"
-					:modelValue="props.modelValue"
+					:modelValue="inputModelValue"
 					:suggestions="suggestions"
 					optionLabel="descr"
 					class="crud-reference-input-autocomplete"
@@ -679,7 +777,7 @@ const clearValue = (): void => {
 				icon="pi pi-times"
 				severity="secondary"
 				outlined
-				:disabled="props.disabled || !props.modelValue"
+				:disabled="!canClear"
 				:title="props.clearTitle"
 				@click="clearValue"
 			/>
@@ -719,6 +817,7 @@ const clearValue = (): void => {
 				ref="creationForm"
 				:collection="creationCollection"
 				:context="creationContext"
+				:defaultValues="creationDefaultValues"
 				@created="acceptCreatedDialog"
 				@cancel="creationVisible = false"
 			/>

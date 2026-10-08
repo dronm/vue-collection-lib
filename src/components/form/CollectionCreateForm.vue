@@ -14,6 +14,7 @@ import { useCollectionCreate } from "../../composables/form/useCollectionCreate"
 const props = defineProps<{
 	collection: CollectionDefinition<TModel, TKey, TNew, TUpd, TDetailModel>;
 	context?: GridCreateContext;
+	defaultValues?: Record<string, unknown>;
 }>();
 
 const emit = defineEmits<{
@@ -32,7 +33,11 @@ const {
 	created,
 	updateValue,
 	submit: submitCreate,
-} = useCollectionCreate({ collection: props.collection, context: props.context });
+} = useCollectionCreate({
+	collection: props.collection,
+	context: props.context,
+	defaultValues: props.defaultValues,
+});
 
 const getDraft = (): TModel => draft;
 

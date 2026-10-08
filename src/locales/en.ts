@@ -7,6 +7,7 @@ const en = {
 			popupBlocked: "The creation tab could not be opened. Allow popups and try again.",
 			invalidResult: "The saved record's keys do not match the created record. Check the saved detail or creation mapping.",
 			inputDisabled: "The reference input is disabled. Enable it to select the saved record.",
+			invalidPrefill: "Creation prefill must return an object containing field defaults.",
 		},
 	},
 	Grid: {

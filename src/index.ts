@@ -45,6 +45,7 @@ export * from "./utils/errorText";
 export * from "./utils/reference";
 export * from "./utils/referenceAutocomplete";
 export * from "./utils/referenceCreation";
+export * from "./utils/referenceCreationDefaults";
 export * from "./utils/validation";
 export * from "./plugin";
 export * from "./composables/useChildCollection";
