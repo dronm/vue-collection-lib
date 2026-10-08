@@ -1,4 +1,14 @@
 const en = {
+	Reference: {
+		create: {
+			title: "Create new",
+			retrySelection: "Retry selection",
+			savedSelectionPending: "The record has been saved. Retry selecting it without creating another record.",
+			popupBlocked: "The creation tab could not be opened. Allow popups and try again.",
+			invalidResult: "The saved record's keys do not match the created record. Check the saved detail or creation mapping.",
+			inputDisabled: "The reference input is disabled. Enable it to select the saved record.",
+		},
+	},
 	Grid: {
 		empty: "No data",
 		loading: "Loading...",

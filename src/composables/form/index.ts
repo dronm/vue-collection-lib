@@ -6,3 +6,4 @@ export * from "./events";
 export * from "./useCollectionDirtyGuard";
 export * from "./useCollectionFormModel";
 export * from "./useCollectionEditPage";
+export * from "./useCollectionCreate";

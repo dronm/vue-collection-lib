@@ -2,6 +2,7 @@ import type { RouteLocationRaw } from "vue-router";
 
 import type {
 	ReferenceAutocompleteConfig,
+	ReferenceCreateAction,
 	ReferenceKeys,
 	ReferenceKeyValue,
 	ReferenceRow,
@@ -20,4 +21,6 @@ export interface CrudReferenceDefinition<
 	selectRoute?: RouteLocationRaw | (() => RouteLocationRaw);
 	openTarget?: "_self" | "_blank";
 	selectTarget?: "_self" | "_blank";
+	/** Omit to hide the Create new button. */
+	create?: ReferenceCreateAction<TRow>;
 }

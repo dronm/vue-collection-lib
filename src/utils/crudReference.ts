@@ -6,6 +6,7 @@ import type {
 } from "../types/referenceDefinition";
 import type {
 	ReferenceKeys,
+	ReferenceCreateAction,
 	ReferenceKeyValue,
 	ReferenceRow,
 	ReferenceValue,
@@ -36,6 +37,7 @@ export interface DefineCrudReferenceOptions<
 	selectRoute?: RouteLocationRaw | (() => RouteLocationRaw);
 	openTarget?: "_self" | "_blank";
 	selectTarget?: "_self" | "_blank";
+	create?: ReferenceCreateAction<TRow>;
 }
 
 export const defineCrudReference = <
@@ -120,5 +122,6 @@ export const defineCrudReference = <
 		selectRoute: options.selectRoute,
 		openTarget: options.openTarget ?? "_blank",
 		selectTarget: options.selectTarget ?? "_blank",
+		create: options.create,
 	};
 };

@@ -15,7 +15,7 @@ The package provides a server-driven CRUD grid, reference/autocomplete input, fo
 - built-in inline Select editors for enum fields;
 - built-in inline DatePicker editors for date and datetime fields;
 - automatic collection reload after WebSocket CRUD events;
-- reference autocomplete with open, collection-picker select, and clear actions;
+- reference autocomplete with open, collection-picker select, optional create-new, and clear actions;
 - create/update payload generation with changed fields only;
 - reference-to-key payload mapping;
 - Valibot validation and normalized API/field errors;
@@ -606,6 +606,44 @@ For document detail grids, `useChildCollection()` owns the parent filter, next l
 
 Inline editor drafts are always exposed as reactive rows. Every built-in editor writes through `applyGridInlineValue()`, which applies optional `normalizeValue`, assigns the edited field, and then invokes `setValue`. A `setValue` callback therefore normally contains only dependent-field logic (for example `quant × price → amount` or `material → measure unit`). Custom `editor-*` slots receive the same reactive row through `data` and the same write function through `updateValue(value)`.
 
+### Creating a referenced element
+
+Add `create` to a reference definition to enable its Create new button. Omitting `create` keeps the button hidden. The same definition works in standalone forms and inline grid editors.
+
+For a simple catalogue, reuse its existing collection definition:
+
+```ts
+export const categoryReference = defineCrudReference({
+	list: categoryApi.list,
+	detail: categoryApi.detail,
+	keyField: "id",
+	searchField: "name",
+	descrFields: ["name"],
+	create: {
+		mode: "dialog",
+		collection: () => categoryCollection,
+	},
+});
+```
+
+The generated dialog uses the collection's editable columns, `createRow`, `createModel`, and `api.create`. It loads the saved detail before returning the selected reference. `createSchema` and `validateCreate` on the collection provide optional validation. Fields with `createEditable: false` are omitted; `createEditable: true` includes a field that is read-only during updates.
+
+For a custom creation page, use:
+
+```ts
+create: {
+	mode: "page",
+	route: { name: "CategoryCreate" },
+	target: "_blank",
+},
+```
+
+Pages built with `useCollectionEditPage()` return the created detail automatically when opened through this action. The same page opened normally keeps its usual redirect behavior. Custom form handlers can use `useReferenceCreation()` to complete or cancel the return flow.
+
+Creation updates the originating reference through its normal model and dependent-field hooks. A parent form or grid row remains unsaved; cancelling that parent later does not delete the independently created catalogue element. To restrict creation in the UI, use `:showCreate="canCreate"` on `ReferenceKeyInput`, or set `create.disabled`. The backend must enforce its own permissions.
+
+See [reference creation documentation](src/components/reference/README.md#creating-a-referenced-element) for setup, customization, and custom-page completion. A typechecked API, collection, and reference example is in `examples/basic-crud/referenceCreation.ts`.
+
 ## ReferenceInput
 
 A reference value has keys and a human-readable description:
@@ -816,6 +854,7 @@ The `examples/` directory contains:
 - a typed REST API and DTO conversion;
 - a routed CRUD grid;
 - reference filtering and autocomplete;
+- reference creation through a generated dialog or an existing page;
 - a Valibot-backed create/edit/copy form;
 - a Nuxt client WebSocket plugin.
 
@@ -827,7 +866,7 @@ npm run check
 npm pack --dry-run
 ```
 
-`npm run check` performs source type checking, example type checking, and regression tests.
+`npm run check` performs source and example type checking, Node regression tests, and mounted Vue component tests. Run `npm run test:components` to run only the component tests.
 
 See `PUBLISHING.md` for the release checklist.
 

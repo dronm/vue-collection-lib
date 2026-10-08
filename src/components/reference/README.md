@@ -106,6 +106,234 @@ const referenceSelectionMode = useReferenceSelectionMode();
 
 Collection pages themselves do not need any special handling.
 
+## Creating a referenced element
+
+Configure `create` on `defineCrudReference()` to show a Create new button next to the reference input. Without this property the button is hidden. The definition is shared by `ReferenceKeyInput` in forms and by columns using `dataType: "reference"` in grids.
+
+### Generated creation dialog
+
+The dialog reuses the referenced collection's metadata. It needs `createRow` to initialize a draft and `api.create` to save it. Provide `api.detail` or `loadCreated` on the collection to load the saved record before selecting it.
+
+```ts
+import * as v from "valibot";
+import {
+	defineCollection,
+	defineCrudReference,
+	type GridColumn,
+} from "@katren/vue-collection-lib";
+import { categoryApi } from "@/api/category";
+
+interface Category {
+	id: number;
+	name: string;
+}
+
+type CategoryKey = { id: number };
+type CategoryNew = Omit<Category, "id">;
+type CategoryUpd = Partial<CategoryNew>;
+
+export const categoryCollection = defineCollection<
+	Category,
+	CategoryKey,
+	CategoryNew,
+	CategoryUpd
+>({
+	titleKey: "Category.title",
+	api: categoryApi,
+	dataKey: "id",
+	getKey: (row) => ({ id: row.id }),
+	editMode: "inline",
+	columns: [
+		{
+			field: "id",
+			headerKey: "Category.fields.id",
+			dataType: "number",
+		},
+		{
+			field: "name",
+			headerKey: "Category.fields.name",
+			editable: true,
+			dataType: "string",
+		},
+	],
+	createRow: () => ({ id: 0, name: "" }),
+	createModel: (row) => ({ name: row.name.trim() }),
+	createSchema: v.object({
+		name: v.pipe(v.string(), v.minLength(1, "Name is required")),
+	}),
+});
+
+export const categoryReference = defineCrudReference<Category, CategoryKey>({
+	list: categoryApi.list,
+	detail: categoryApi.detail,
+	keyField: "id",
+	searchField: "name",
+	descrFields: ["name"],
+	selectRoute: { name: "CategoryList" },
+	create: {
+		mode: "dialog",
+		collection: () => categoryCollection,
+		title: "Create category",
+	},
+});
+
+interface ProductRow {
+	id: number;
+	category_id: number | null;
+}
+
+export const productColumns: GridColumn<ProductRow>[] = [
+	{
+		field: "category_id",
+		headerKey: "Product.fields.category",
+		editable: true,
+		dataType: "reference",
+		reference: categoryReference,
+	},
+];
+```
+
+In a standalone form, use the same reference:
+
+```vue
+<ReferenceKeyInput
+	v-model="form.category_id"
+	:reference="categoryReference"
+	:showCreate="canCreateCategory"
+/>
+```
+
+For a form storing a full `{ keys, descr }` reference, pass the same action to the low-level input:
+
+```vue
+<ReferenceInput
+	v-model="form.category_ref"
+	:autocomplete="categoryReference.autocomplete"
+	:createAction="categoryReference.create"
+	:showCreate="canCreateCategory"
+/>
+```
+
+The dialog renders fields whose `createEditable ?? editable` is true. Use `createEditable: false` to exclude an otherwise editable field, or `createEditable: true` to include a field editable only on creation. Noneditable ID and calculated columns are omitted by default. `createModel` supplies the payload, including required values that are not displayed. Without it, the library maps the creation fields to a payload.
+
+Built-in string, number, boolean, date, datetime, enum, and reference editors share the grid's value normalization and `setValue` hooks. `editorProps` also applies. For custom controls, declare `editorComponent` on the column: that component receives `modelValue`, emits `update:modelValue`, and can accept props from `editorProps`. Page-owned `#editor-${field}` slots cannot be discovered by the generated dialog; put reusable controls in column metadata or choose page creation.
+
+`createSchema` validates the payload with Valibot. An optional `validateCreate(model, row)` can perform additional synchronous or asynchronous validation, throw a validation error, or return a replacement payload. Field and API errors appear in the dialog and leave the draft open.
+
+To supply fixed values such as a hierarchy parent, add `context` to the creation configuration. It accepts a `GridCreateContext` or a function returning one:
+
+```ts
+create: {
+	mode: "dialog",
+	collection: () => categoryCollection,
+	context: () => ({
+		kind: "item",
+		initialValues: { parent_id: currentParentId.value },
+	}),
+},
+```
+
+The context is passed to `createRow(context)`. Its `initialValues` are also applied to the draft and override the corresponding payload fields; include those fields in any creation schema and backend contract. For editable defaults, initialize them in `createRow` instead.
+
+### Existing creation page
+
+Use page mode for a standalone form with its own layout or business logic:
+
+```ts
+export const categoryReference = defineCrudReference<Category, CategoryKey>({
+	list: categoryApi.list,
+	detail: categoryApi.detail,
+	keyField: "id",
+	searchField: "name",
+	descrFields: ["name"],
+	create: {
+		mode: "page",
+		route: { name: "CategoryCreate" },
+		target: "_blank",
+	},
+});
+```
+
+The library opens the route with an internal creation token, separate from collection-picker selection. Page creation targets a new tab; `_blank` is the default. The target route must already exist.
+
+`useCollectionEditPage()` recognizes creation mode automatically. After a successful create, it loads the saved detail through `api.detail`, returns it to the originating input, and closes the tab. Its normal list/stay redirect is skipped for this return flow. Opening the same page without a creation token preserves its normal behavior. The composable's `goBack()` closes the creation tab when cancelling.
+
+If loading or returning the saved detail fails after creation, the page retains `createdKey` and displays the error. Saving again retries completion for that key without creating another record. The generated dialog likewise retries the saved-detail step instead of repeating creation.
+
+When the detail shape differs from the autocomplete row, provide `rowFromDetail` in either creation mode. It must return the row shape used by the reference's `keyField`, `descrFields`, `dataFields`, and `format`:
+
+```ts
+create: {
+	mode: "page",
+	route: { name: "CategoryCreate" },
+	rowFromDetail: (detail) => {
+		const saved = detail as { id: number; display_name: string };
+		return { id: saved.id, name: saved.display_name };
+	},
+},
+```
+
+The returned reference keys must match the saved key from `api.create`. By default, a scalar saved key maps to the reference's single key field, while object keys use the configured key-field names. If your backend returns another shape, add `keysFromCreated: (key: unknown) => ReferenceKeys` to adapt it before validation. This is separate from `rowFromDetail`, which adapts the displayed row.
+
+### Custom form handlers
+
+Forms that do not use `useCollectionEditPage()` can call `useReferenceCreation()`. Its `complete(key, row)` returns `false` outside creation mode, so an ordinary page can retain its existing redirect. In creation mode it publishes the saved row and closes the tab. Its `cancel()` follows the same rule for cancellation.
+
+Preserve the created key before loading detail or completing the return flow. This prevents a later retry from creating the same record twice. For example, inside the creation page's `<script setup lang="ts">`:
+
+```ts
+import { ref } from "vue";
+import { useRouter } from "vue-router";
+import {
+	useFormErrors,
+	useReferenceCreation,
+} from "@katren/vue-collection-lib";
+import { categoryApi } from "@/api/category";
+
+const router = useRouter();
+const referenceCreation = useReferenceCreation();
+const errors = useFormErrors();
+const form = ref({ name: "" });
+const createdKey = ref<{ id: number } | null>(null);
+const submitting = ref(false);
+
+const save = async (): Promise<void> => {
+	if (submitting.value) {
+		return;
+	}
+	submitting.value = true;
+	errors.clear();
+	try {
+		// Run your normal form validation before the first create request.
+		createdKey.value ??= await categoryApi.create({ name: form.value.name });
+		const saved = await categoryApi.detail(createdKey.value);
+		if (!referenceCreation.complete(createdKey.value, saved)) {
+			await router.push({ name: "CategoryList" });
+		}
+	} catch (error: unknown) {
+		errors.setFromError(error);
+	} finally {
+		submitting.value = false;
+	}
+};
+
+const cancel = async (): Promise<void> => {
+	if (!referenceCreation.cancel()) {
+		await router.push({ name: "CategoryList" });
+	}
+};
+```
+
+Render the form errors and submitting state with your existing form controls. After `createdKey` is set, lock the draft fields or clearly indicate that Save retries return of the already created record. The helper's `creationMode` is a computed boolean for any page-specific presentation. The non-composable `completeReferenceCreation(key, row, options)` is also exported for handlers outside Vue setup.
+
+### Visibility, permissions, and parent drafts
+
+- Missing `create` always hides the button. `showCreate: false` additionally hides an otherwise configured action.
+- `create.disabled: true` leaves the button visible but disables it. A disabled reference input also disables creation.
+- Permission checks are explicit: the library does not infer authorization from API methods. Hide or disable the action using the application's permission state, and enforce create permissions in the backend.
+- Cancelling creation preserves the previous reference. Successfully returning a saved record replaces it through the normal model-update path, including grid `normalizeValue` and `setValue` hooks.
+- Creation does not submit the parent form or grid row. Saving a child dialog does not clear the parent's dirty state. Cancelling the parent later leaves the newly created catalogue record available.
+
 ## Custom suggestion and selected-value content
 
 `ReferenceInput` supports two optional typed slots. Existing references without these slots keep their text-only appearance and behavior.

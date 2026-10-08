@@ -12,19 +12,13 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter, type RouteLocationRaw } from "vue-router";
 
 import Button from "primevue/button";
-import Checkbox from "primevue/checkbox";
 import Column, {
 	type ColumnPassThroughMethodOptions,
 	type ColumnPassThroughOptions,
 } from "primevue/column";
 import DataTable, { type DataTableSortEvent } from "primevue/datatable";
-import DatePicker from "primevue/datepicker";
 import Dialog from "primevue/dialog";
-import InputNumber from "primevue/inputnumber";
-import InputText from "primevue/inputtext";
-import Select from "primevue/select";
 
-import ReferenceKeyInput from "../reference/ReferenceKeyInput.vue";
 import ReferenceKeyLabel from "../reference/ReferenceKeyLabel.vue";
 
 import { useWSManager } from "../../api/wsProvider";
@@ -42,6 +36,7 @@ import {
 } from "../../composables/useGridCommands";
 import CollectionBreadcrumbs from "./CollectionBreadcrumbs.vue";
 import GridCommandPanel from "./GridCommandPanel.vue";
+import GridFieldEditor from "./GridFieldEditor.vue";
 import GridSearchDialog from "./GridSearchDialog.vue";
 import GridSearchPanel from "./GridSearchPanel.vue";
 import {
@@ -60,11 +55,8 @@ import {
 import {
 	cloneGridRow,
 	formatGridValue,
-	gridDatePickerProps,
-	isGridDateDataType,
 	makeChangedModel,
 	makeCreateModel,
-	resolveGridEnumOptionLabel,
 } from "./gridUtils";
 import {
 	makeReferenceSelectionMessage,
@@ -89,7 +81,6 @@ import type {
 	GridCreateContext,
 	GridDeleteEvent,
 	GridEditMode,
-	GridEnumOption,
 	GridHierarchyConfig,
 	GridRowClass,
 	GridRowClassResolver,
@@ -320,17 +311,6 @@ const displaySearchCriteria = computed(() => {
 		};
 	});
 });
-
-const resolvedEnumOptions = (
-	column: GridColumn<TModel>,
-): GridEnumOption[] => {
-	return (column.enumOptions ?? []).map((option) => {
-		return {
-			...option,
-			label: resolveGridEnumOptionLabel(option, t),
-		};
-	});
-};
 
 const currentSearchField = computed(() => {
 	if (effectiveRowSelection.value || grid.selectedCell.value === null) {
@@ -2268,52 +2248,12 @@ defineExpose<CollectionGridExpose>({
 						:value="getReactiveGridEditRow(data)[field]"
 						:updateValue="(value:any) => applyGridInlineValue(data, column, value)"
 					>
-						<ReferenceKeyInput
-							v-if="column.dataType === 'reference' && column.reference"
-							v-bind="column.editorProps"
+						<GridFieldEditor
+							:column="column"
+							:row="getReactiveGridEditRow(data)"
 							:modelValue="getReactiveGridEditRow(data)[field]"
 							:projectedValue="column.referenceField ? getReactiveGridEditRow(data)[column.referenceField] : undefined"
-							:reference="column.reference"
-							class="crud-grid-editor-control"
-							@update:modelValue="applyGridInlineValue(data, column, $event)"
-						/>
-						<Checkbox
-							v-else-if="column.dataType === 'boolean'"
-							v-bind="column.editorProps"
-							:modelValue="getReactiveGridEditRow(data)[field]"
-							binary
-							@update:modelValue="applyGridInlineValue(data, column, $event)"
-						/>
-						<InputNumber
-							v-else-if="column.dataType === 'number'"
-							v-bind="column.editorProps"
-							:modelValue="getReactiveGridEditRow(data)[field]"
-							class="crud-grid-editor-control"
-							@update:modelValue="applyGridInlineValue(data, column, $event)"
-						/>
-						<DatePicker
-							v-else-if="isGridDateDataType(column.dataType)"
-							v-bind="gridDatePickerProps(column.dataType, column.editorProps)"
-							:modelValue="getReactiveGridEditRow(data)[field]"
-							class="crud-grid-editor-control"
-							@update:modelValue="applyGridInlineValue(data, column, $event)"
-						/>
-						<Select
-							v-else-if="column.dataType === 'enum'"
-							v-bind="column.editorProps"
-							:modelValue="getReactiveGridEditRow(data)[field]"
-							:options="resolvedEnumOptions(column)"
-							optionLabel="label"
-							optionValue="value"
-							optionDisabled="disabled"
-							class="crud-grid-editor-control"
-							@update:modelValue="applyGridInlineValue(data, column, $event)"
-						/>
-						<InputText
-							v-else
-							v-bind="column.editorProps"
-							:modelValue="getReactiveGridEditRow(data)[field]"
-							class="crud-grid-editor-control"
+							:class="column.dataType === 'boolean' && !column.editorComponent ? undefined : 'crud-grid-editor-control'"
 							@update:modelValue="applyGridInlineValue(data, column, $event)"
 						/>
 					</slot>

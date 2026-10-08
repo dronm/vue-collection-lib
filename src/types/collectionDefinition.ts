@@ -1,3 +1,5 @@
+import type { GenericSchema } from "valibot";
+
 import type { CollectionParams, CollectionSorter } from "./collection";
 import type {
 	CollectionGridApi,
@@ -26,6 +28,11 @@ export interface CollectionDefinition<
 	editMode?: GridEditMode;
 	createRow?: (context?: GridCreateContext) => TModel;
 	createModel?: (row: TModel) => TNew;
+	/** Validation shared by metadata-driven creation forms. */
+	createSchema?: GenericSchema<TNew>;
+	validateCreate?: (model: TNew, row: TModel) => TNew | void | Promise<TNew | void>;
+	/** Loads the authoritative saved detail when api.detail is unavailable or needs adaptation. */
+	loadCreated?: (key: TKey) => Promise<TDetailModel>;
 	baseParams?: CollectionParams;
 	defaultSorter?: CollectionSorter[];
 	hierarchy?: GridHierarchyConfig<TModel>;

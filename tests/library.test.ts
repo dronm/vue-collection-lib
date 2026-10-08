@@ -1177,49 +1177,67 @@ test("CollectionGrid wires inline editors through the reactive draft contract", 
 	);
 });
 
-test("CollectionGrid uses DatePicker for built-in date and datetime editors", async () => {
+test("shared grid field editor uses DatePicker for date and datetime editors", async () => {
 	const source = await readFile(
-		new URL("../src/components/crudGrid/CollectionGrid.vue", import.meta.url),
+		new URL("../src/components/crudGrid/GridFieldEditor.vue", import.meta.url),
 		"utf8",
 	);
 
 	assert.match(source, /import DatePicker from "primevue\/datepicker"/);
-	assert.match(source, /<DatePicker\s+[\s\S]*?v-else-if="isGridDateDataType\(column\.dataType\)"/);
+	assert.match(source, /<DatePicker\s+[\s\S]*?v-else-if="isGridDateDataType\(props\.column\.dataType\)"/);
 	assert.match(
 		source,
-		/v-bind="gridDatePickerProps\(column\.dataType, column\.editorProps\)"/,
+		/v-bind="gridDatePickerProps\(props\.column\.dataType, props\.column\.editorProps\)"/,
 	);
-	assert.match(source, /:modelValue="getReactiveGridEditRow\(data\)\[field\]"/);
+	assert.match(source, /:modelValue="props\.modelValue"/);
 	assert.match(
 		source,
-		/@update:modelValue="applyGridInlineValue\(data, column, \$event\)"/,
+		/@update:modelValue="emit\('update:modelValue', \$event\)"/,
 	);
 });
 
-test("CollectionGrid keeps the custom editor slot ahead of the built-in enum Select", async () => {
+test("CollectionGrid preserves custom slot priority ahead of the reusable field editor", async () => {
 	const source = await readFile(
 		new URL("../src/components/crudGrid/CollectionGrid.vue", import.meta.url),
 		"utf8",
 	);
 	const editorSlotStart = source.indexOf(":name=\"`editor-${column.field}`\"");
 	const editorSlotEnd = source.indexOf("</slot>", editorSlotStart);
-	const enumSelectMatch = source.match(
-		/<Select\s+[\s\S]*?v-else-if="column\.dataType === 'enum'"[\s\S]*?\/>/,
+	const sharedEditorMatch = source.match(
+		/<GridFieldEditor\s+[\s\S]*?\/>/,
 	);
 
 	assert.ok(editorSlotStart >= 0);
 	assert.ok(editorSlotEnd > editorSlotStart);
-	assert.ok(enumSelectMatch?.index !== undefined);
-	assert.ok(enumSelectMatch.index > editorSlotStart);
-	assert.ok(enumSelectMatch.index < editorSlotEnd);
-	assert.match(enumSelectMatch[0], /v-bind="column\.editorProps"/);
-	assert.match(enumSelectMatch[0], /:options="resolvedEnumOptions\(column\)"/);
-	assert.match(enumSelectMatch[0], /optionValue="value"/);
-	assert.match(enumSelectMatch[0], /optionDisabled="disabled"/);
+	assert.ok(sharedEditorMatch?.index !== undefined);
+	assert.ok(sharedEditorMatch.index > editorSlotStart);
+	assert.ok(sharedEditorMatch.index < editorSlotEnd);
+	assert.match(sharedEditorMatch[0], /:column="column"/);
+	assert.match(sharedEditorMatch[0], /:row="getReactiveGridEditRow\(data\)"/);
 	assert.match(
-		enumSelectMatch[0],
+		sharedEditorMatch[0],
 		/@update:modelValue="applyGridInlineValue\(data, column, \$event\)"/,
 	);
+});
+
+test("shared field editor preserves enum options and reusable custom editor priority", async () => {
+	const source = await readFile(
+		new URL("../src/components/crudGrid/GridFieldEditor.vue", import.meta.url),
+		"utf8",
+	);
+	const customEditorIndex = source.indexOf("v-if=\"props.column.editorComponent\"");
+	const enumSelectMatch = source.match(
+		/<Select\s+[\s\S]*?v-else-if="props\.column\.dataType === 'enum'"[\s\S]*?\/>/,
+	);
+
+	assert.ok(customEditorIndex >= 0);
+	assert.ok(enumSelectMatch?.index !== undefined);
+	assert.ok(enumSelectMatch.index > customEditorIndex);
+	assert.match(enumSelectMatch[0], /v-bind="props\.column\.editorProps"/);
+	assert.match(enumSelectMatch[0], /:options="resolvedEnumOptions"/);
+	assert.match(enumSelectMatch[0], /optionValue="value"/);
+	assert.match(enumSelectMatch[0], /optionDisabled="disabled"/);
+	assert.match(enumSelectMatch[0], /@update:modelValue="emit\('update:modelValue', \$event\)"/);
 	assert.doesNotMatch(enumSelectMatch[0], /showClear/);
 });
 

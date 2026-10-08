@@ -30,9 +30,11 @@ const props = withDefaults(defineProps<{
 	showOpen?: boolean;
 	showSelect?: boolean;
 	showClear?: boolean;
+	showCreate?: boolean;
 	openTitle?: string;
 	selectTitle?: string;
 	clearTitle?: string;
+	createTitle?: string;
 }>(), {
 	modelValue: null,
 	disabled: false,
@@ -42,6 +44,7 @@ const props = withDefaults(defineProps<{
 	showOpen: true,
 	showSelect: true,
 	showClear: true,
+	showCreate: true,
 });
 
 const emit = defineEmits<{
@@ -127,11 +130,14 @@ const selectAction = computed(() => {
 		:showOpen="props.showOpen && Boolean(openAction)"
 		:showSelect="props.showSelect && Boolean(selectAction)"
 		:showClear="props.showClear"
+		:showCreate="props.showCreate"
 		:openAction="openAction"
 		:selectAction="selectAction"
+		:createAction="props.reference.create"
 		:openTitle="props.openTitle"
 		:selectTitle="props.selectTitle"
 		:clearTitle="props.clearTitle"
+		:createTitle="props.createTitle"
 		@update:modelValue="updateReference"
 	/>
 </template>

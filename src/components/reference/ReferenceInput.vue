@@ -2,15 +2,21 @@
 import {
 	computed,
 	onBeforeUnmount,
+	ref,
 	shallowRef,
+	watch,
 } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 
 import AutoComplete from "primevue/autocomplete";
 import Button from "primevue/button";
+import Dialog from "primevue/dialog";
+import CollectionCreateForm from "../form/CollectionCreateForm.vue";
 
 import type {
 	ReferenceAutocompleteConfig,
+	ReferenceCreateAction,
 	ReferenceKeys,
 	ReferenceRouteAction,
 	ReferenceRow,
@@ -29,6 +35,16 @@ import {
 	REFERENCE_SELECTION_QUERY_PARAM,
 	referenceSelectionChannelName,
 } from "../../utils/referenceSelection";
+import {
+	createReferenceCreationToken,
+	isReferenceCreationMessage,
+	REFERENCE_CREATION_QUERY_PARAM,
+	referenceCreationChannelName,
+} from "../../utils/referenceCreation";
+import type { CollectionDefinition } from "../../types/collectionDefinition";
+import type { GridCreateContext } from "../crudGrid/types";
+import type { FormErrorsController } from "../../types/formErrors";
+import { collectionReferenceChangeEvent } from "../../composables/form/events";
 
 type ReferenceOption = ReferenceValue<TKeys> & {
 	__row: TRow;
@@ -47,11 +63,14 @@ const props = withDefaults(defineProps<{
 	showOpen?: boolean;
 	showSelect?: boolean;
 	showClear?: boolean;
+	showCreate?: boolean;
 	openAction?: ReferenceRouteAction<ReferenceValue<TKeys>>;
 	selectAction?: ReferenceSelectAction;
+	createAction?: ReferenceCreateAction<TRow>;
 	openTitle?: string;
 	selectTitle?: string;
 	clearTitle?: string;
+	createTitle?: string;
 }>(), {
 	modelValue: null,
 	disabled: false,
@@ -60,6 +79,7 @@ const props = withDefaults(defineProps<{
 	showOpen: true,
 	showSelect: true,
 	showClear: true,
+	showCreate: true,
 	openTitle: "Open",
 	selectTitle: "Select",
 	clearTitle: "Clear",
@@ -70,6 +90,7 @@ const emit = defineEmits<{
 	select: [value: ReferenceValue<TKeys>, row: TRow];
 	open: [value: ReferenceValue<TKeys>];
 	selectRequest: [];
+	createRequest: [];
 	clear: [];
 }>();
 
@@ -85,16 +106,45 @@ const slots = defineSlots<{
 }>();
 
 const router = useRouter();
+const { t } = useI18n();
+const rootEl = ref<HTMLElement | null>(null);
 const suggestions = shallowRef<ReferenceOption[]>([]);
 const loading = shallowRef(false);
 const searchError = shallowRef<string | null>(null);
+const creationError = shallowRef<string | null>(null);
+const creationVisible = ref(false);
+const creationPending = ref(false);
+const creationCollection = shallowRef<CollectionDefinition<any, any, any, any, any> | null>(null);
+const creationContext = shallowRef<GridCreateContext | undefined>(undefined);
+const activeCreateAction = shallowRef<ReferenceCreateAction<TRow> | null>(null);
+const receivedCreatedDetail = shallowRef<{ row: object; key: unknown } | null>(null);
+const creationForm = ref<{
+	submitting: boolean;
+	errors: FormErrorsController;
+} | null>(null);
+const showCreateButton = computed(() => props.showCreate && Boolean(props.createAction));
+const canCreate = computed(() => {
+	return showCreateButton.value
+		&& !props.disabled
+		&& !props.createAction?.disabled
+		&& !creationPending.value
+		&& !creationVisible.value
+		&& receivedCreatedDetail.value === null;
+});
+const creationTitle = computed(() => {
+	return activeCreateAction.value?.title ?? (
+		creationCollection.value
+			? `${t('Reference.create.title')}: ${t(creationCollection.value.titleKey)}`
+			: t('Reference.create.title')
+	);
+});
 
 const inputInvalid = computed(() => {
 	return props.invalid || Boolean(props.error);
 });
 
 const hasActionButtons = computed(() => {
-	return props.showOpen || props.showSelect || props.showClear;
+	return props.showOpen || props.showSelect || props.showClear || showCreateButton.value;
 });
 
 const canOpen = computed(() => {
@@ -173,6 +223,7 @@ const stripOption = (
 };
 
 const updateModelValue = (value: unknown): void => {
+	abandonCreatedSelection();
 	if (value === null || value === undefined || value === "") {
 		emit("update:modelValue", null);
 		return;
@@ -196,10 +247,16 @@ const updateModelValue = (value: unknown): void => {
 	}
 };
 
-const selectOption = (event: { value: ReferenceOption }): void => {
+const selectOption = (event: { value: ReferenceOption; fromCreation?: boolean }): void => {
+	if (!event.fromCreation) {
+		abandonCreatedSelection();
+	}
 	const selected = stripOption(event.value);
 	emit("update:modelValue", selected);
 	emit("select", selected, event.value.__row);
+	rootEl.value?.dispatchEvent(new CustomEvent(collectionReferenceChangeEvent, {
+		bubbles: true,
+	}));
 };
 
 const openRoute = async (
@@ -273,6 +330,7 @@ const requestSelect = async (): Promise<void> => {
 	if (!canSelect.value) {
 		return;
 	}
+	abandonCreatedSelection();
 
 	emit("selectRequest");
 
@@ -329,18 +387,199 @@ const requestSelect = async (): Promise<void> => {
 	}
 };
 
+let creationChannel: BroadcastChannel | null = null;
+let creationToken: string | null = null;
+let creationWindowPoll: ReturnType<typeof setInterval> | null = null;
+let creationOriginKeys: string | null = null;
+
+const closeCreationSession = (): void => {
+	creationChannel?.close();
+	creationChannel = null;
+	creationToken = null;
+	creationOriginKeys = null;
+	creationPending.value = false;
+	if (creationWindowPoll !== null) {
+		clearInterval(creationWindowPoll);
+		creationWindowPoll = null;
+	}
+	if (typeof window !== "undefined") {
+		window.removeEventListener("message", onCreationWindowMessage);
+	}
+};
+
+const abandonCreatedSelection = (): void => {
+	closeCreationSession();
+	receivedCreatedDetail.value = null;
+	creationError.value = null;
+	activeCreateAction.value = null;
+};
+
+const applyCreatedDetail = (detail: object, createdKey: unknown): void => {
+	if (props.disabled || props.createAction?.disabled) {
+		throw new Error(t("Reference.create.inputDisabled"));
+	}
+	const action = activeCreateAction.value ?? props.createAction;
+	const row = action?.rowFromDetail ? action.rowFromDetail(detail) : detail as TRow;
+	if (typeof row !== "object" || row === null || Array.isArray(row)) {
+		throw new Error(t("Reference.create.invalidResult"));
+	}
+	const option = optionFromRow(row);
+	const savedKeys = action?.keysFromCreated
+		? action.keysFromCreated(createdKey)
+		: typeof createdKey === "object" && createdKey !== null && !Array.isArray(createdKey)
+			? createdKey as ReferenceKeys
+			: props.autocomplete.keyFields.length === 1
+				? { [props.autocomplete.keyFields[0]!]: createdKey }
+				: null;
+	if (
+		savedKeys === null
+		|| typeof savedKeys !== "object"
+		|| props.autocomplete.keyFields.length === 0
+		|| props.autocomplete.keyFields.some((field) => {
+			const key = option.keys?.[field];
+			return key === null || key === undefined || key === ""
+				|| !["string", "number", "boolean"].includes(typeof key)
+				|| key !== savedKeys?.[field];
+		})
+	) {
+		throw new Error(t("Reference.create.invalidResult"));
+	}
+	selectOption({ value: option, fromCreation: true });
+	creationError.value = null;
+	receivedCreatedDetail.value = null;
+};
+
+const acceptCreatedDialog = (detail: object, key: unknown): void => {
+	try {
+		applyCreatedDetail(detail, key);
+		creationVisible.value = false;
+	} catch (err: unknown) {
+		creationForm.value?.errors.setFromError(err);
+	}
+};
+
+const acceptCreatedPage = (detail: object, key: unknown): void => {
+	receivedCreatedDetail.value = { row: detail, key };
+	try {
+		applyCreatedDetail(detail, key);
+	} catch (err: unknown) {
+		creationError.value = errorText(err);
+	} finally {
+		closeCreationSession();
+	}
+};
+
+const onCreationWindowMessage = (event: MessageEvent<unknown>): void => {
+	if (
+		typeof window === "undefined"
+		|| event.origin !== window.location.origin
+		|| !isReferenceCreationMessage(event.data)
+		|| event.data.token !== creationToken
+	) {
+		return;
+	}
+	acceptCreatedPage(event.data.row, event.data.key);
+};
+
+const retryCreatedSelection = (): void => {
+	if (receivedCreatedDetail.value !== null) {
+		acceptCreatedPage(receivedCreatedDetail.value.row, receivedCreatedDetail.value.key);
+	}
+};
+
+const requestCreate = (): void => {
+	if (!canCreate.value || !props.createAction) {
+		return;
+	}
+
+	emit("createRequest");
+	closeSelectionSession();
+	closeCreationSession();
+	creationError.value = null;
+	activeCreateAction.value = props.createAction;
+	const action = props.createAction;
+	try {
+		if (action.mode === "dialog") {
+			creationCollection.value = action.collection();
+			creationContext.value = typeof action.context === "function"
+				? action.context()
+				: action.context;
+			creationVisible.value = true;
+			return;
+		}
+
+		if (typeof window === "undefined") {
+			return;
+		}
+		const routeValue = typeof action.route === "function" ? action.route() : action.route;
+		const resolved = router.resolve(routeValue);
+		creationToken = createReferenceCreationToken();
+		const href = router.resolve({
+			path: resolved.path,
+			query: {
+				...resolved.query,
+				[REFERENCE_CREATION_QUERY_PARAM]: creationToken,
+			},
+			hash: resolved.hash,
+		}).href;
+
+		if (typeof BroadcastChannel !== "undefined") {
+			try {
+				creationChannel = new BroadcastChannel(referenceCreationChannelName(creationToken));
+				creationChannel.onmessage = (event: MessageEvent<unknown>) => {
+					if (isReferenceCreationMessage(event.data) && event.data.token === creationToken) {
+						acceptCreatedPage(event.data.row, event.data.key);
+					}
+				};
+			} catch {
+				creationChannel = null;
+			}
+		}
+		window.addEventListener("message", onCreationWindowMessage);
+		const popup = window.open(href, "_blank");
+		if (popup === null) {
+			throw new Error(t("Reference.create.popupBlocked"));
+		}
+		creationPending.value = true;
+		creationOriginKeys = JSON.stringify(props.modelValue?.keys ?? null);
+		creationWindowPoll = setInterval(() => {
+			if (popup.closed) {
+				closeCreationSession();
+			}
+		}, 500);
+	} catch (err: unknown) {
+		closeCreationSession();
+		creationError.value = errorText(err);
+	}
+};
+
+watch(creationVisible, (visible) => {
+	if (!visible) {
+		creationCollection.value = null;
+		creationContext.value = undefined;
+	}
+});
+
+watch(() => JSON.stringify(props.modelValue?.keys ?? null), (keys) => {
+	if (creationPending.value && keys !== creationOriginKeys) {
+		abandonCreatedSelection();
+	}
+});
+
 onBeforeUnmount(() => {
 	closeSelectionSession();
+	closeCreationSession();
 });
 
 const clearValue = (): void => {
+	abandonCreatedSelection();
 	emit("update:modelValue", null);
 	emit("clear");
 };
 </script>
 
 <template>
-	<div class="crud-reference-input">
+	<div ref="rootEl" class="crud-reference-input">
 		<label
 			v-if="props.label"
 			:for="props.id"
@@ -422,6 +661,19 @@ const clearValue = (): void => {
 			/>
 
 			<Button
+				v-if="showCreateButton"
+				type="button"
+				class="crud-reference-input-action"
+				icon="pi pi-plus"
+				severity="secondary"
+				outlined
+				:disabled="!canCreate"
+				:title="props.createTitle ?? t('Reference.create.title')"
+				:aria-label="props.createTitle ?? t('Reference.create.title')"
+				@click="requestCreate"
+			/>
+
+			<Button
 				v-if="props.showClear"
 				class="crud-reference-input-action"
 				icon="pi pi-times"
@@ -439,6 +691,38 @@ const clearValue = (): void => {
 		>
 			{{ props.error }}
 		</small>
+
+		<small
+			v-if="creationError"
+			class="crud-reference-input-error"
+			role="alert"
+		>
+			{{ creationError }}
+		</small>
+		<Button
+			v-if="receivedCreatedDetail"
+			type="button"
+			:label="t('Reference.create.retrySelection')"
+			:disabled="props.disabled || props.createAction?.disabled"
+			@click="retryCreatedSelection"
+		/>
+		<Dialog
+			v-model:visible="creationVisible"
+			:header="creationTitle"
+			:style="{ width: '36rem', maxWidth: '95vw' }"
+			:closable="!creationForm?.submitting"
+			:closeOnEscape="!creationForm?.submitting"
+			modal
+		>
+			<CollectionCreateForm
+				v-if="creationVisible && creationCollection"
+				ref="creationForm"
+				:collection="creationCollection"
+				:context="creationContext"
+				@created="acceptCreatedDialog"
+				@cancel="creationVisible = false"
+			/>
+		</Dialog>
 
 		<small
 			v-if="searchError"

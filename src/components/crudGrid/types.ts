@@ -105,7 +105,11 @@ export interface GridColumn<TModel extends object> {
 	sortable?: boolean;
 	sortField?: string;
 	editable?: boolean;
+	/** Whether this field is offered by generated creation forms. Defaults to editable. */
+	createEditable?: boolean;
 	dataType?: GridCellDataType;
+	/** Reusable v-model editor used by inline grids and generated creation forms. */
+	editorComponent?: Component | string;
 	/**
 	 * Props forwarded to the built-in inline editor component.
 	 *

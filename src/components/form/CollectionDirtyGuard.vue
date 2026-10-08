@@ -21,6 +21,7 @@ import {
 	collectionFormDirtyGuardMarkDirtyEvent,
 	collectionFormSubmitErrorEvent,
 	collectionFormSubmitSuccessEvent,
+	collectionReferenceChangeEvent,
 } from "../../composables/form/events";
 
 type RouterGuardUnregister = () => void;
@@ -180,6 +181,7 @@ watch(
 onMounted(() => {
 	rootEl.value?.addEventListener("input", onFieldMutation, true);
 	rootEl.value?.addEventListener("change", onFieldMutation, true);
+	rootEl.value?.addEventListener(collectionReferenceChangeEvent, onFieldMutation, true);
 	window.addEventListener(collectionFormSubmitSuccessEvent, onSubmitSuccess);
 	window.addEventListener(collectionFormSubmitErrorEvent, onSubmitError);
 	window.addEventListener(collectionFormDirtyGuardMarkCleanEvent, onExternalMarkClean);
@@ -206,6 +208,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
 	rootEl.value?.removeEventListener("input", onFieldMutation, true);
 	rootEl.value?.removeEventListener("change", onFieldMutation, true);
+	rootEl.value?.removeEventListener(collectionReferenceChangeEvent, onFieldMutation, true);
 	window.removeEventListener(collectionFormSubmitSuccessEvent, onSubmitSuccess);
 	window.removeEventListener(collectionFormSubmitErrorEvent, onSubmitError);
 	window.removeEventListener(collectionFormDirtyGuardMarkCleanEvent, onExternalMarkClean);

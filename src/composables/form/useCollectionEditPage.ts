@@ -2,6 +2,7 @@ import {
 	computed,
 	onMounted,
 	ref,
+	shallowRef,
 	type Ref,
 } from "vue";
 import {
@@ -16,6 +17,7 @@ import type * as v from "valibot";
 import type { CollectionAlterResult } from "../../types/collection";
 import type { FormMutationFieldConfig } from "../../types/formMutation";
 import type { CollectionFormMode } from "../../types/formSubmit";
+import { useReferenceCreation } from "../useReferenceCreation";
 import { useCollectionFormSubmit } from "./useCollectionFormSubmit";
 import { useFormErrors } from "./useFormErrors";
 
@@ -60,6 +62,9 @@ export const useCollectionEditPage = <
 	const loading = ref(false);
 	const model = ref(options.createModel()) as Ref<TModel>;
 	const errors = useFormErrors();
+	const referenceCreation = useReferenceCreation();
+	const createdKey = shallowRef<TKey | null>(null);
+	const completingReferenceCreation = ref(false);
 	const isCreateRoute = computed(() => route.name === options.createRouteName);
 	const mode = computed<CollectionFormMode>(() => {
 		if (!isCreateRoute.value) {
@@ -73,10 +78,27 @@ export const useCollectionEditPage = <
 	const key = computed(() => options.keyFromRoute(route));
 
 	const goBack = async (): Promise<void> => {
+		if (referenceCreation.creationMode.value) {
+			referenceCreation.cancel();
+			return;
+		}
+
 		const target = typeof options.listRoute === "function"
 			? options.listRoute()
 			: options.listRoute;
 		await router.push(target);
+	};
+
+	const returnCreatedReference = async (savedKey: TKey): Promise<void> => {
+		completingReferenceCreation.value = true;
+		try {
+			const detail = await options.api.detail(savedKey);
+			if (!referenceCreation.complete(savedKey, detail)) {
+				throw new Error("Reference creation context is no longer available.");
+			}
+		} finally {
+			completingReferenceCreation.value = false;
+		}
 	};
 
 	const submitController = useCollectionFormSubmit<TModel, TKey, TCreate, TUpdate>({
@@ -91,6 +113,16 @@ export const useCollectionEditPage = <
 		updateSchema: options.updateSchema,
 		errors,
 		onSuccess: async (result) => {
+			if (
+				result.operation === "create"
+				&& result.key !== null
+				&& referenceCreation.creationMode.value
+			) {
+				createdKey.value = result.key;
+				await returnCreatedReference(result.key);
+				return;
+			}
+
 			const success = options.success;
 			if (!success || success.mode === "back") {
 				await goBack();
@@ -142,6 +174,20 @@ export const useCollectionEditPage = <
 	};
 
 	const submit = async (value: TModel): Promise<void> => {
+		if (submitController.submitting.value || completingReferenceCreation.value) {
+			return;
+		}
+
+		if (createdKey.value !== null && referenceCreation.creationMode.value) {
+			errors.clear();
+			try {
+				await returnCreatedReference(createdKey.value);
+			} catch (err: unknown) {
+				errors.setFromError(err);
+			}
+			return;
+		}
+
 		await submitController.submit(value);
 	};
 
@@ -154,6 +200,8 @@ export const useCollectionEditPage = <
 		loading,
 		errors,
 		submitting: submitController.submitting,
+		createdKey,
+		completingReferenceCreation,
 		submit,
 		load,
 		goBack,

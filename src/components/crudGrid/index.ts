@@ -1,5 +1,6 @@
 export { default as CollectionListPage } from "./CollectionListPage.vue";
 export { default as CollectionGrid } from "./CollectionGrid.vue";
+export { default as GridFieldEditor } from "./GridFieldEditor.vue";
 export { default as CollectionBreadcrumbs } from "./CollectionBreadcrumbs.vue";
 export { default as GridCommandPanel } from "./GridCommandPanel.vue";
 export { default as GridSearchDialog } from "./GridSearchDialog.vue";

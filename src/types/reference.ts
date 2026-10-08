@@ -1,6 +1,8 @@
 import type { RouteLocationRaw } from "vue-router";
 
 import type { CollectionParams } from "../types/collection";
+import type { CollectionDefinition } from "./collectionDefinition";
+import type { GridCreateContext } from "../components/crudGrid/types";
 export type ReferenceKeyValue = string | number | boolean | null;
 
 export type ReferenceKeys = Record<string, ReferenceKeyValue>;
@@ -59,3 +61,32 @@ export interface ReferenceSelectAction {
 	target?: "_self" | "_blank";
 	disabled?: boolean;
 }
+
+export interface ReferenceCreateActionBase<TRow extends ReferenceRow = ReferenceRow> {
+	title?: string;
+	disabled?: boolean;
+	/** Adapt the saved detail projection to the row expected by autocomplete. */
+	rowFromDetail?: (detail: object) => TRow;
+	/** Adapt unusual API create-key shapes to the autocomplete key fields. */
+	keysFromCreated?: (key: unknown) => ReferenceKeys;
+}
+
+export interface ReferenceCreateDialogAction<TRow extends ReferenceRow = ReferenceRow>
+	extends ReferenceCreateActionBase<TRow> {
+	mode: "dialog";
+	/** A lazy provider keeps collection configuration out of the input itself. */
+	collection: () => CollectionDefinition<any, any, any, any, any>;
+	context?: GridCreateContext | (() => GridCreateContext);
+}
+
+export interface ReferenceCreatePageAction<TRow extends ReferenceRow = ReferenceRow>
+	extends ReferenceCreateActionBase<TRow> {
+	mode: "page";
+	route: RouteLocationRaw | (() => RouteLocationRaw);
+	/** Creation pages stay in another tab so the parent draft stays mounted. */
+	target?: "_blank";
+}
+
+export type ReferenceCreateAction<TRow extends ReferenceRow = ReferenceRow> =
+	| ReferenceCreateDialogAction<TRow>
+	| ReferenceCreatePageAction<TRow>;
