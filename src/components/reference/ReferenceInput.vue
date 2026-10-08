@@ -129,6 +129,14 @@ const inputModelValue = computed(() => {
 		? props.modelValue
 		: { keys: null, descr: restoredDescription.value };
 });
+const inputFocused = ref(false);
+const inputBlurred = ref(false);
+const showUnselected = computed(() => {
+	return inputBlurred.value
+		&& !inputFocused.value
+		&& inputModelValue.value?.keys === null
+		&& inputModelValue.value.descr.trim() !== "";
+});
 const canClear = computed(() => {
 	return !props.disabled && Boolean(
 		props.modelValue
@@ -244,6 +252,15 @@ const stripOption = (
 const resetTypedDescription = (): void => {
 	typedDescription.value = "";
 	restoredDescription.value = null;
+};
+
+const focusInput = (): void => {
+	inputFocused.value = true;
+};
+
+const blurInput = (): void => {
+	inputFocused.value = false;
+	inputBlurred.value = true;
 };
 
 const captureTypedDescription = (event: Event): void => {
@@ -676,7 +693,11 @@ const clearValue = (): void => {
 </script>
 
 <template>
-	<div ref="rootEl" class="crud-reference-input">
+	<div
+		ref="rootEl"
+		class="crud-reference-input"
+		:class="{ 'crud-reference-input--unselected': showUnselected }"
+	>
 		<label
 			v-if="props.label"
 			:for="props.id"
@@ -700,7 +721,10 @@ const clearValue = (): void => {
 					:suggestions="suggestions"
 					optionLabel="descr"
 					class="crud-reference-input-autocomplete"
-					inputClass="crud-reference-input-autocomplete-input"
+					:inputClass="{
+						'crud-reference-input-autocomplete-input': true,
+						'crud-reference-input--unselected': showUnselected,
+					}"
 					:placeholder="props.placeholder"
 					:disabled="props.disabled"
 					:required="props.required"
@@ -712,6 +736,8 @@ const clearValue = (): void => {
 					@complete="complete"
 					@item-select="selectOption"
 					@update:modelValue="updateModelValue"
+					@focus="focusInput"
+					@blur="blurInput"
 				>
 					<template #option="{ option }">
 						<slot

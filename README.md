@@ -650,6 +650,8 @@ See [reference creation documentation](src/components/reference/README.md#creati
 
 ## ReferenceInput
 
+A blurred reference containing visible text without a selected key receives `crud-reference-input--unselected` on its wrapper and native input. Applications can style this class; it is independent of validation and has no default color. See [unselected-text styling](src/components/reference/README.md#styling-unselected-text-after-blur).
+
 A reference value has keys and a human-readable description:
 
 ```ts

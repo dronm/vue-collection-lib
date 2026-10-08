@@ -106,6 +106,20 @@ const referenceSelectionMode = useReferenceSelectionMode();
 
 Collection pages themselves do not need any special handling.
 
+## Styling unselected text after blur
+
+When a user leaves visible, nonblank text without selecting a reference, `ReferenceInput` adds `crud-reference-input--unselected` to both its wrapper and the native autocomplete input. The class is absent on initial render and while the input is focused. Focusing the input, selecting a record, or clearing the value removes it. If `forceSelection` visibly clears unmatched text on blur, the empty input remains unmarked.
+
+This class is independent of validation errors. The library does not apply a default color; the application can style it. For example, add this to a global stylesheet to make the unselected text red:
+
+```css
+input.crud-reference-input--unselected {
+	color: #dc2626;
+}
+```
+
+Target the wrapper class instead when styling the entire reference control. The same behavior is available through `ReferenceKeyInput` and built-in grid reference editors.
+
 ## Creating a referenced element
 
 Configure `create` on `defineCrudReference()` to show a Create new button next to the reference input. Without this property the button is hidden. The definition is shared by `ReferenceKeyInput` in forms and by columns using `dataType: "reference"` in grids.

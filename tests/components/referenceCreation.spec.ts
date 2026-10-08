@@ -326,6 +326,24 @@ const typeAndBlur = async (wrapper: VueWrapper, text: string) => {
 	return input;
 };
 
+const unselectedClass = "crud-reference-input--unselected";
+const expectUnselectedMark = (wrapper: VueWrapper, expected: boolean) => {
+	const control = wrapper.find(".crud-reference-input");
+	const input = control.find(".crud-reference-input-field input");
+	for (const element of [control, input]) {
+		expect(element.classes().includes(unselectedClass)).toBe(expected);
+	}
+};
+
+const typeWithoutBlur = async (wrapper: VueWrapper, text: string) => {
+	const input = wrapper.find(".crud-reference-input-field input");
+	(input.element as HTMLInputElement).focus();
+	(input.element as HTMLInputElement).value = text;
+	await input.trigger("input");
+	await flushPromises();
+	return input;
+};
+
 afterEach(() => {
 	for (const wrapper of mounted.splice(0)) {
 		wrapper.unmount();
@@ -1124,5 +1142,116 @@ describe("typed reference creation prefill", () => {
 		} else {
 			expect(open).toHaveBeenCalledTimes(1);
 		}
+	});
+});
+
+describe("unselected reference styling", () => {
+	it("marks standalone unmatched visible text after blur and removes both classes immediately on refocus", async () => {
+		const parent = reactive<{ value: ReferenceValue<CategoryKey> | null }>({ value: null });
+		const Host = defineComponent({
+			setup: () => () => h(ReferenceInput, {
+				autocomplete: { ...autocomplete, forceSelection: false, delay: 0 },
+				modelValue: parent.value,
+				"onUpdate:modelValue": (value: ReferenceValue<CategoryKey> | null) => {
+					parent.value = value;
+				},
+			}),
+		});
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		expectUnselectedMark(wrapper, false);
+		const input = await typeWithoutBlur(wrapper, "Unselected standalone text");
+		expect(parent.value?.keys).toBeNull();
+		expectUnselectedMark(wrapper, false);
+		(input.element as HTMLInputElement).blur();
+		await flushPromises();
+		expectUnselectedMark(wrapper, true);
+		(input.element as HTMLInputElement).focus();
+		await flushPromises();
+		expectUnselectedMark(wrapper, false);
+		(input.element as HTMLInputElement).blur();
+		await flushPromises();
+		expectUnselectedMark(wrapper, true);
+	});
+
+	it("keeps whitespace unmarked and removes the mark on existing selection or Clear", async () => {
+		const fixture = categoryFixture();
+		fixture.reference.autocomplete.forceSelection = false;
+		const { Host } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		await typeAndBlur(wrapper, "   ");
+		expectUnselectedMark(wrapper, false);
+		await typeAndBlur(wrapper, "A visible candidate");
+		expectUnselectedMark(wrapper, true);
+		const option = { ...oldReference, __row: { ...fixture.saved, id: 1, name: oldReference.descr } };
+		const control = wrapper.findComponent(AutoComplete);
+		control.vm.$emit("update:modelValue", option);
+		control.vm.$emit("item-select", { value: option });
+		await flushPromises();
+		expectUnselectedMark(wrapper, false);
+		await wrapper.find('button[title="Clear"]').trigger("click");
+		expectUnselectedMark(wrapper, false);
+		await typeAndBlur(wrapper, "Another unselected candidate");
+		expectUnselectedMark(wrapper, true);
+		await wrapper.find('button[title="Clear"]').trigger("click");
+		await flushPromises();
+		expectUnselectedMark(wrapper, false);
+	});
+
+	it("leaves forceSelection-cleared blank input unmarked, then marks restored visible prefill text after dialog cancellation", async () => {
+		const fixture = categoryFixture();
+		fixture.createAction.prefill = (text) => ({ name: text });
+		const { Host } = typedReferenceHost(fixture);
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		const input = await typeAndBlur(wrapper, "Restore this candidate");
+		expect((input.element as HTMLInputElement).value).toBe("");
+		expectUnselectedMark(wrapper, false);
+		await creationButton(wrapper).trigger("click");
+		await flushPromises();
+		Array.from(dialog().querySelectorAll("button")).find((button) => button.textContent === "Cancel")!.click();
+		await flushPromises();
+		expect((input.element as HTMLInputElement).value).toBe("Restore this candidate");
+		expectUnselectedMark(wrapper, true);
+		(input.element as HTMLInputElement).focus();
+		await flushPromises();
+		expectUnselectedMark(wrapper, false);
+	});
+
+	it("marks scalar reference input text in the shared grid editor while its scalar value remains null", async () => {
+		const fixture = categoryFixture();
+		fixture.reference.autocomplete.forceSelection = false;
+		fixture.reference.autocomplete.delay = 0;
+		const row = reactive<{ category_id: number | null; category_ref: ReferenceValue<CategoryKey> | null }>({
+			category_id: null,
+			category_ref: null,
+		});
+		const column: GridColumn<typeof row> = {
+			field: "category_id",
+			headerKey: "category_id",
+			editable: true,
+			dataType: "reference",
+			reference: fixture.reference,
+			referenceField: "category_ref",
+		};
+		const Host = defineComponent({
+			setup: () => () => h(GridFieldEditor, {
+				column,
+				row,
+				modelValue: row.category_id,
+				projectedValue: row.category_ref,
+				"onUpdate:modelValue": (value: unknown) => applyGridInlineValue(row, column, value),
+			}),
+		});
+		const { wrapper } = await mountSubject(Host, {}, { realAutocomplete: true });
+		expect(wrapper.findComponent(ReferenceKeyInput).exists()).toBe(true);
+		const input = await typeWithoutBlur(wrapper, "Unselected inline category");
+		expect(row.category_id).toBeNull();
+		expectUnselectedMark(wrapper, false);
+		(input.element as HTMLInputElement).blur();
+		await flushPromises();
+		expect(row.category_id).toBeNull();
+		expectUnselectedMark(wrapper, true);
+		(input.element as HTMLInputElement).focus();
+		await flushPromises();
+		expectUnselectedMark(wrapper, false);
 	});
 });
