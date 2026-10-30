@@ -32,6 +32,7 @@ const { t } = useI18n();
 			:routes="props.collection.routes"
 			:stateKey="props.collection.stateKey"
 			:pageSize="props.collection.pageSize ?? 30"
+			:infiniteScroll="props.collection.infiniteScroll"
 			:showCommandShortcuts="props.collection.showCommandShortcuts ?? true"
 		/>
 	</section>

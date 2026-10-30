@@ -7,6 +7,7 @@ The package provides a server-driven CRUD grid, reference/autocomplete input, fo
 ## Features
 
 - PrimeVue `DataTable` CRUD grid with lazy pagination and server sorting;
+- opt-in infinite cursor scrolling with prefetching, virtual rendering, and a bounded cache;
 - optional server-driven hierarchical collections with group navigation, breadcrumbs, and flat/global-search mode;
 - built-in create, edit, copy, delete, search, and refresh commands;
 - keyboard shortcuts, row marking, cell cursor, context menu, and persisted grid state;
@@ -875,6 +876,10 @@ npm pack --dry-run
 `npm run check` performs source and example type checking, Node regression tests, and mounted Vue component tests. Run `npm run test:components` to run only the component tests.
 
 See `PUBLISHING.md` for the release checklist.
+
+## Infinite scrolling
+
+Collections can opt in to buffered cursor scrolling through `infiniteScroll`, while existing collections keep pagination by default. See [Infinite scrolling](docs/INFINITE_SCROLLING.md) for the backend opt-in, configuration, and examples.
 
 ## License
 

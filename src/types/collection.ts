@@ -62,10 +62,17 @@ export interface SortField {
 
 export interface CollectionParams {
 	filter?: CollectionFilter[];
+	/** Opt-in grouped conditions supported by modelbind's CollectionParamsWithWhere. */
+	where?: CollectionWhere;
 	sorter?: CollectionSorter[];
 	from?: number;
 	count?: number;
 }
+
+export type CollectionWhere =
+	| { f: string; o: FilterOperatorParam; v: unknown }
+	| { and: CollectionWhere[] }
+	| { or: CollectionWhere[] };
 
 export interface CollectionTotCount {
 	tot_count: number;

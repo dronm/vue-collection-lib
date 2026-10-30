@@ -1,6 +1,7 @@
 import type { GenericSchema } from "valibot";
 
 import type { CollectionParams, CollectionSorter } from "./collection";
+import type { InfiniteScrollOptions } from "./infiniteCollection";
 import type {
 	CollectionGridApi,
 	GridColumn,
@@ -38,6 +39,8 @@ export interface CollectionDefinition<
 	hierarchy?: GridHierarchyConfig<TModel>;
 	stateKey?: string;
 	pageSize?: number;
+	/** Opt in to buffered cursor scrolling. Omit to retain ordinary pagination. */
+	infiniteScroll?: InfiniteScrollOptions<TModel>;
 	showCommandShortcuts?: boolean;
 }
 

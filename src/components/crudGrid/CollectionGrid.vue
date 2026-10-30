@@ -18,6 +18,7 @@ import Column, {
 } from "primevue/column";
 import DataTable, { type DataTableSortEvent } from "primevue/datatable";
 import Dialog from "primevue/dialog";
+import type { VirtualScrollerMethods, VirtualScrollerProps, VirtualScrollerScrollIndexChangeEvent } from "primevue/virtualscroller";
 
 import ReferenceKeyLabel from "../reference/ReferenceKeyLabel.vue";
 
@@ -27,6 +28,7 @@ import {
 	type CollectionParams,
 	type CollectionSorter,
 } from "../../types/collection";
+import type { InfiniteScrollOptions } from "../../types/infiniteCollection";
 import { errorText } from "../../utils/errorText";
 import { useCollectionGrid } from "../../composables/useCollectionGrid";
 import { useCollectionHierarchy } from "../../composables/useCollectionHierarchy";
@@ -105,6 +107,7 @@ const props = withDefaults(defineProps<{
 	stateKey?: string;
 	baseParams?: CollectionParams;
 	pageSize?: number;
+	infiniteScroll?: InfiniteScrollOptions<TModel>;
 	rowsPerPageOptions?: number[];
 	defaultSorter?: CollectionSorter[];
 	commands?: GridCommand<TModel, TKey>[];
@@ -219,6 +222,7 @@ const inlineCreatePreviousSelection = shallowRef<{
 } | null>(null);
 const originalRows = new WeakMap<TModel, TModel>();
 const rootEl = ref<HTMLElement | null>(null);
+const tableRef = ref<{ getVirtualScrollerRef?: () => VirtualScrollerMethods } | null>(null);
 const pointerScrollPosition = ref<GridScrollPosition | null>(null);
 
 const referenceSelectionToken = computed(() => {
@@ -266,6 +270,9 @@ const baseParamsRef = computed<CollectionParams | undefined>(() => {
 			...(external.filter ?? []),
 			...(hierarchical.filter ?? []),
 		],
+		where: external.where && hierarchical.where
+			? { and: [external.where, hierarchical.where] }
+			: external.where ?? hierarchical.where,
 		sorter: [
 			...(hierarchical.sorter ?? []),
 			...(external.sorter ?? []),
@@ -282,6 +289,248 @@ const grid = useCollectionGrid<TModel, TKey, TNew, TUpd, TDetailModel>({
 	pageSize: props.pageSize,
 	rowSelection: effectiveRowSelection.value,
 	defaultSorter: props.defaultSorter,
+	dataKey: props.dataKey,
+	infiniteScroll: computed(() => props.infiniteScroll),
+	canEvict: () => !inlineEditing.value,
+});
+
+type InfiniteLoadDirection = "next" | "previous";
+
+const failedInfiniteDirection = ref<InfiniteLoadDirection | null>(null);
+const infiniteItemSize = computed(() => {
+	const itemSize = props.infiniteScroll?.itemSize ?? 40;
+	return Number.isFinite(itemSize) && itemSize > 0 ? itemSize : 40;
+});
+const infiniteScrollHeight = computed(() => props.infiniteScroll?.scrollHeight ?? "32rem");
+const infiniteViewport = ref({ first: 0, last: 0 });
+let infiniteScrollDirection: InfiniteLoadDirection = "next";
+let lastInfiniteScrollTop = 0;
+let restoringInfiniteViewport = false;
+let infiniteWindowUpdate = 0;
+let infiniteCheckPending = false;
+let infiniteUnmounted = false;
+let pendingInfiniteReset = false;
+let infiniteInitialLoadRevision = 0;
+
+const getInfiniteScroller = (): VirtualScrollerMethods | null => {
+	return tableRef.value?.getVirtualScrollerRef?.() ?? null;
+};
+
+const getInfiniteScrollElement = (): HTMLElement | null => {
+	return rootEl.value?.querySelector<HTMLElement>("[data-pc-name='virtualscroller'], .p-virtualscroller") ?? null;
+};
+
+const getInfiniteViewport = (): { first: number; last: number } => {
+	const viewport = getInfiniteScroller()?.getRenderedRange?.().viewport;
+	if (viewport && Number.isFinite(viewport.first) && Number.isFinite(viewport.last) && viewport.last > viewport.first) {
+		return { first: Math.max(0, viewport.first), last: Math.max(viewport.first, viewport.last) };
+	}
+
+	const element = getInfiniteScrollElement();
+	if (element && element.clientHeight > 0) {
+		const first = Math.max(0, Math.floor(element.scrollTop / infiniteItemSize.value));
+		return { first, last: first + Math.ceil(element.clientHeight / infiniteItemSize.value) };
+	}
+
+	return infiniteViewport.value;
+};
+
+const firstVisibleInfiniteRow = (): TModel | undefined => {
+	const viewport = getInfiniteViewport();
+	return grid.rows.value[Math.min(viewport.first, Math.max(0, grid.rows.value.length - 1))];
+};
+
+const requestInfiniteChunk = async (direction: InfiniteLoadDirection): Promise<void> => {
+	if (
+		!grid.isInfinite.value
+		|| inlineEditing.value
+		|| restoringInfiniteViewport
+		|| grid.loading.value
+		|| grid.loadingMore.value
+		|| grid.loadingPrevious.value
+	) {
+		return;
+	}
+
+	failedInfiniteDirection.value = null;
+	try {
+		if (direction === "previous") {
+			await grid.loadPrevious();
+		} else {
+			await grid.loadNext();
+		}
+	} catch {
+		// The loader keeps the existing rows and exposes its useful error message.
+		failedInfiniteDirection.value = direction;
+	}
+};
+
+const checkInfiniteViewport = (): void => {
+	if (infiniteUnmounted || !grid.isInfinite.value || inlineEditing.value || restoringInfiniteViewport || failedInfiniteDirection.value || grid.error.value) {
+		return;
+	}
+
+	const viewport = getInfiniteViewport();
+	infiniteViewport.value = viewport;
+	grid.setVisibleRange(viewport.first, Math.max(viewport.first, viewport.last - 1));
+	const threshold = props.infiniteScroll?.prefetchRows ?? 30;
+	if (infiniteScrollDirection === "previous" && viewport.first <= threshold && grid.hasPrevious.value) {
+		void requestInfiniteChunk("previous");
+	} else if (grid.rows.value.length - viewport.last <= threshold && grid.hasNext.value) {
+		void requestInfiniteChunk("next");
+	}
+};
+
+const scheduleInfiniteViewportCheck = (): void => {
+	if (infiniteCheckPending) {
+		return;
+	}
+	infiniteCheckPending = true;
+	void nextTick().then(() => {
+		infiniteCheckPending = false;
+		checkInfiniteViewport();
+	});
+};
+
+const onInfiniteScroll = (event: Event): void => {
+	if (restoringInfiniteViewport) {
+		return;
+	}
+	const element = event.target instanceof HTMLElement ? event.target : getInfiniteScrollElement();
+	const top = element?.scrollTop ?? lastInfiniteScrollTop;
+	if (top !== lastInfiniteScrollTop) {
+		infiniteScrollDirection = top < lastInfiniteScrollTop ? "previous" : "next";
+	}
+	lastInfiniteScrollTop = top;
+	scheduleInfiniteViewportCheck();
+};
+
+const onInfiniteScrollIndexChange = (event: VirtualScrollerScrollIndexChangeEvent): void => {
+	if (restoringInfiniteViewport) {
+		return;
+	}
+	if (!getInfiniteScrollElement() && event.first !== infiniteViewport.value.first) {
+		infiniteScrollDirection = event.first < infiniteViewport.value.first ? "previous" : "next";
+	}
+	infiniteViewport.value = { first: event.first, last: event.last };
+	scheduleInfiniteViewportCheck();
+};
+
+const infiniteVirtualScrollerOptions = computed(() => {
+	if (!grid.isInfinite.value) {
+		return undefined;
+	}
+	return {
+		itemSize: infiniteItemSize.value,
+		numToleratedItems: Math.max(1, Math.min(props.infiniteScroll?.prefetchRows ?? 30, 20)),
+		onScroll: onInfiniteScroll,
+		onScrollIndexChange: onInfiniteScrollIndexChange,
+	} satisfies VirtualScrollerProps & {
+		onScroll: (event: Event) => void;
+		onScrollIndexChange: (event: VirtualScrollerScrollIndexChangeEvent) => void;
+	};
+});
+
+const infiniteRowStyle = (): Record<string, string> | undefined => {
+	return grid.isInfinite.value ? { height: `${infiniteItemSize.value}px` } : undefined;
+};
+
+const refreshVisibleWindow = async (): Promise<void> => {
+	if (grid.isInfinite.value) {
+		failedInfiniteDirection.value = null;
+		await grid.refresh(firstVisibleInfiniteRow());
+	} else {
+		await grid.load();
+	}
+};
+
+const retryInfiniteLoad = async (): Promise<void> => {
+	if (failedInfiniteDirection.value) {
+		await requestInfiniteChunk(failedInfiniteDirection.value);
+	} else {
+		try {
+			await grid.load();
+		} catch {
+			// Initial retry failures remain visible without rejecting the click handler.
+		}
+	}
+};
+
+watch(grid.rows, (rows, previousRows) => {
+	if (!grid.isInfinite.value) {
+		return;
+	}
+
+	const generation = ++infiniteWindowUpdate;
+	const viewport = getInfiniteViewport();
+	const anchorRow = previousRows[Math.min(viewport.first, Math.max(0, previousRows.length - 1))];
+	const anchorKey = anchorRow ? JSON.stringify(props.getKey(anchorRow)) : null;
+	const nextAnchorIndex = anchorKey === null ? -1 : rows.findIndex((row) => JSON.stringify(props.getKey(row)) === anchorKey);
+	const element = getInfiniteScrollElement();
+	const previousTop = element?.scrollTop ?? viewport.first * infiniteItemSize.value;
+	const change = grid.infiniteChange.value;
+	const reset = change?.kind === "reset" || previousRows.length === 0;
+	const top = reset
+		? 0
+		: nextAnchorIndex >= 0
+			? Math.max(0, previousTop + (nextAnchorIndex - viewport.first) * infiniteItemSize.value)
+			: Math.max(0, previousTop - (change?.removedBefore ?? 0) * infiniteItemSize.value);
+	restoringInfiniteViewport = true;
+
+	void nextTick().then(() => {
+		if (generation !== infiniteWindowUpdate) {
+			return;
+		}
+		const scroller = getInfiniteScroller();
+		const scrollElement = getInfiniteScrollElement();
+		if (scrollElement) {
+			const left = scrollElement.scrollLeft;
+			scroller?.scrollTo?.({ top, left, behavior: "auto" });
+			// Also assign offsets for environments without Element.scrollTo support.
+			scrollElement.scrollTop = top;
+		} else {
+			scroller?.scrollToIndex?.(Math.floor(top / infiniteItemSize.value));
+		}
+		lastInfiniteScrollTop = top;
+		const first = Math.floor(top / infiniteItemSize.value);
+		infiniteViewport.value = { first, last: first + Math.max(1, viewport.last - viewport.first) };
+		if (reset) {
+			infiniteScrollDirection = "next";
+			failedInfiniteDirection.value = null;
+		}
+		restoringInfiniteViewport = false;
+		scheduleInfiniteViewportCheck();
+	});
+}, { flush: "sync" });
+
+watch(inlineEditing, (editing) => {
+	if (!editing) {
+		if (grid.isInfinite.value && pendingInfiniteReset) {
+			pendingInfiniteReset = false;
+			grid.setPage(0, grid.rowsPerPage.value);
+			grid.selectRow(null);
+			void load().catch(() => undefined);
+			return;
+		}
+		scheduleInfiniteViewportCheck();
+	}
+});
+
+watch(grid.loading, (loading, previousLoading) => {
+	if (!grid.isInfinite.value) {
+		return;
+	}
+	if (loading) {
+		infiniteInitialLoadRevision = grid.infiniteRevision.value;
+	} else if (previousLoading && inlineEditing.value && grid.infiniteRevision.value === infiniteInitialLoadRevision) {
+		// A reset/refresh arriving during an edit is intentionally ignored by the
+		// loader. Retry it once the editor closes, preserving the active draft.
+		pendingInfiniteReset = true;
+	}
+});
+
+watch([grid.loading, grid.loadingMore, grid.loadingPrevious], () => {
+	scheduleInfiniteViewportCheck();
 });
 
 const searchableColumns = computed(() => {
@@ -523,12 +772,21 @@ const resolveRowClass = (row: TModel): string => {
 };
 
 const load = async (): Promise<void> => {
+	if (grid.isInfinite.value && inlineEditing.value) {
+		pendingInfiniteReset = true;
+		return;
+	}
+	pendingInfiniteReset = false;
 	await grid.load();
 };
 
 watch(
 	() => props.baseParams,
 	() => {
+		if (grid.isInfinite.value && inlineEditing.value) {
+			pendingInfiniteReset = true;
+			return;
+		}
 		grid.setPage(0, grid.rowsPerPage.value);
 		grid.selectRow(null);
 		void load().catch((err: unknown) => {
@@ -629,7 +887,7 @@ const scheduleEventRefresh = (): void => {
 			return;
 		}
 
-		void load().catch((error: unknown) => {
+		void refreshVisibleWindow().catch((error: unknown) => {
 			console.error("Failed to refresh collection after CRUD event", error);
 		});
 	}, props.eventRefreshDelay);
@@ -1291,6 +1549,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+	infiniteUnmounted = true;
+	infiniteWindowUpdate += 1;
 	unsubscribeFromCrudEvents();
 	document.removeEventListener("pointerdown", onDocumentPointerDown, true);
 	document.removeEventListener("mousedown", onDocumentMouseDown, true);
@@ -1462,9 +1722,13 @@ const removeDeletedRowsLocally = (rows: TModel[]): void => {
 		rows.map((row) => JSON.stringify(props.getKey(row))),
 	);
 	const previousCount = grid.rows.value.length;
-	grid.rows.value = grid.rows.value.filter((row) => {
-		return !deletedKeys.has(JSON.stringify(props.getKey(row)));
-	});
+	if (grid.isInfinite.value) {
+		grid.removeRows(rows);
+	} else {
+		grid.rows.value = grid.rows.value.filter((row) => {
+			return !deletedKeys.has(JSON.stringify(props.getKey(row)));
+		});
+	}
 	const removedCount = previousCount - grid.rows.value.length;
 	grid.totalRecords.value = Math.max(0, grid.totalRecords.value - removedCount);
 
@@ -1524,7 +1788,7 @@ const deleteRowsImmediately = async (
 			grid.clearMarkedRows();
 			removeDeletedRowsLocally(rows.slice(0, result.deletedCount));
 			try {
-				await load();
+				await refreshVisibleWindow();
 			} catch (error: unknown) {
 				reloadError = errorText(error);
 			}
@@ -1625,7 +1889,7 @@ const getCommandContext = (
 		selectedColumn: grid.selectedColumn.value,
 		markedRows: [...grid.markedRows.value],
 		clearMarkedRows: grid.clearMarkedRows,
-		reload: load,
+		reload: refreshVisibleWindow,
 	};
 };
 
@@ -1684,7 +1948,7 @@ const executeCommand = async (
 
 	if (name === "refresh") {
 		emit("refresh");
-		await load();
+		await refreshVisibleWindow();
 		return;
 	}
 
@@ -1842,9 +2106,49 @@ const onRootKeydown = async (event: KeyboardEvent): Promise<void> => {
 		return;
 	}
 
-	if (grid.handleGridArrowKey(event)) {
+	if (
+		grid.isInfinite.value
+		&& (event.key === "ArrowUp" || event.key === "ArrowDown")
+		&& grid.selectedRow.value !== null
+	) {
+		const selectedKey = JSON.stringify(props.getKey(grid.selectedRow.value));
+		if (!grid.rows.value.some((row) => JSON.stringify(props.getKey(row)) === selectedKey)) {
+			const index = Math.min(getInfiniteViewport().first, Math.max(0, grid.rows.value.length - 1));
+			const row = grid.rows.value[index];
+			if (row) {
+				if (effectiveRowSelection.value) {
+					grid.selectRow(row);
+				} else {
+					grid.selectCell(row, index, grid.selectedCell.value?.columnIndex ?? 0);
+				}
+			}
+		}
+	}
+
+	let handled = false;
+	try {
+		handled = grid.isInfinite.value
+			? await grid.moveInfiniteCursor(event)
+			: grid.handleGridArrowKey(event);
+	} catch {
+		failedInfiniteDirection.value = event.key === "ArrowUp" ? "previous" : "next";
+		return;
+	}
+	if (handled) {
 		emit("selectionChange", grid.selectedRow.value);
 		emit("cellChange", grid.selectedCell.value);
+		if (grid.isInfinite.value && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+			await nextTick();
+			const selectedKey = grid.selectedRow.value ? JSON.stringify(props.getKey(grid.selectedRow.value)) : null;
+			const index = grid.rows.value.findIndex((row) => JSON.stringify(props.getKey(row)) === selectedKey);
+			const viewport = getInfiniteViewport();
+			const visibleCount = Math.max(1, viewport.last - viewport.first);
+			if (index >= 0 && (index < viewport.first || index >= viewport.last - 1)) {
+				const topIndex = index < viewport.first ? index : Math.max(0, index - visibleCount + 2);
+				getInfiniteScroller()?.scrollTo?.({ top: topIndex * infiniteItemSize.value, behavior: "auto" });
+			}
+			scheduleInfiniteViewportCheck();
+		}
 	}
 };
 
@@ -1923,7 +2227,7 @@ const onRowEditSave = async (event: {
 		model,
 		row: event.newData,
 	});
-	await load();
+	await refreshVisibleWindow();
 };
 
 const onRowEditCancel = (event: {
@@ -1980,10 +2284,12 @@ defineExpose<CollectionGridExpose>({
 		ref="rootEl"
 		:class="[
 			'outline-none',
+			grid.isInfinite.value ? 'crud-grid-infinite' : '',
 			hierarchy.enabled.value
 				? `crud-grid-hierarchy-${hierarchy.viewMode.value}`
 				: '',
 		]"
+		:style="grid.isInfinite.value ? { '--crud-grid-infinite-item-size': `${infiniteItemSize}px` } : undefined"
 		tabindex="0"
 		@keydown="onRootKeydown"
 		@pointerdown.capture="onGridRootPointerDown"
@@ -2045,6 +2351,15 @@ defineExpose<CollectionGridExpose>({
 			role="alert"
 		>
 			{{ grid.error.value }}
+			<Button
+				v-if="grid.isInfinite.value"
+				:label="t('Grid.infinite.retry')"
+				icon="pi pi-refresh"
+				severity="secondary"
+				size="small"
+				:disabled="grid.loading.value || grid.loadingMore.value || grid.loadingPrevious.value || inlineEditing"
+				@click="retryInfiniteLoad"
+			/>
 		</div>
 
 		<GridSearchDialog
@@ -2134,13 +2449,25 @@ defineExpose<CollectionGridExpose>({
 			</div>
 		</Teleport>
 
+		<div
+			v-if="grid.isInfinite.value && grid.loadingPrevious.value"
+			class="crud-grid-infinite-status"
+			role="status"
+		>
+			{{ t("Grid.infinite.previous") }}
+		</div>
+
 		<DataTable
+			ref="tableRef"
 			v-model:editingRows="editingRows"
 			:value="grid.rows.value"
 			:dataKey="props.dataKey"
 			:loading="grid.loading.value"
 			:lazy="true"
-			:paginator="true"
+			:paginator="!grid.isInfinite.value"
+			:scrollable="grid.isInfinite.value"
+			:scrollHeight="grid.isInfinite.value ? infiniteScrollHeight : undefined"
+			:virtualScrollerOptions="infiniteVirtualScrollerOptions"
 			:first="grid.first.value"
 			:rows="grid.rowsPerPage.value"
 			:totalRecords="grid.totalRecords.value"
@@ -2150,6 +2477,7 @@ defineExpose<CollectionGridExpose>({
 			:sortField="grid.singleSortField.value"
 			:sortOrder="grid.singleSortOrder.value"
 			:rowClass="resolveRowClass"
+			:rowStyle="grid.isInfinite.value ? infiniteRowStyle : undefined"
 			:editMode="props.editMode === 'inline' ? 'row' : undefined"
 			:pt="pt"
 			showGridlines
@@ -2283,11 +2611,50 @@ defineExpose<CollectionGridExpose>({
 			</Column>
 		</DataTable>
 
+		<div
+			v-if="grid.isInfinite.value && !grid.loading.value && !grid.error.value"
+			class="crud-grid-infinite-status"
+			role="status"
+		>
+			<span v-if="grid.loadingMore.value">{{ t("Grid.infinite.loading") }}</span>
+			<span v-else-if="!grid.hasNext.value">{{ t("Grid.infinite.end") }}</span>
+		</div>
+
 	</div>
 </template>
 
 
 <style scoped>
+.crud-grid-infinite-status {
+	color: var(--p-text-muted-color, rgb(107 114 128));
+	font-size: 0.875rem;
+	min-height: 1.75rem;
+	padding: 0.25rem 0;
+}
+
+.crud-grid-infinite :deep(.p-datatable-tbody > tr > td) {
+	box-sizing: border-box;
+	height: var(--crud-grid-infinite-item-size);
+	padding-bottom: 0;
+	padding-top: 0;
+}
+
+.crud-grid-infinite :deep(.p-datatable-tbody > tr > td > *) {
+	box-sizing: border-box;
+	max-height: calc(var(--crud-grid-infinite-item-size) - 2px);
+	min-height: 0;
+}
+
+.crud-grid-infinite .crud-grid-cell-content,
+.crud-grid-infinite .crud-grid-hierarchy-icon {
+	box-sizing: border-box;
+	max-height: calc(var(--crud-grid-infinite-item-size) - 2px);
+	min-height: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .crud-grid-selection-mode {
 	align-items: center;
 	background: var(--p-blue-50, rgb(239 246 255));

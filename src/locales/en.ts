@@ -11,6 +11,12 @@ const en = {
 		},
 	},
 	Grid: {
+		infinite: {
+			loading: "Loading more records...",
+			previous: "Loading previous records...",
+			retry: "Retry loading",
+			end: "End of collection",
+		},
 		empty: "No data",
 		loading: "Loading...",
 		copySuffix: "copy",

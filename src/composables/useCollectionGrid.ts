@@ -1,5 +1,6 @@
 import {
 	computed,
+	onBeforeUnmount,
 	onMounted,
 	ref,
 	shallowRef,
@@ -18,6 +19,8 @@ import type {
 	GridColumn,
 	GridSearchCriterion,
 } from "../components/crudGrid/types";
+import type { InfiniteScrollOptions } from "../types/infiniteCollection";
+import { useInfiniteCollection } from "./useInfiniteCollection";
 import { errorText } from "../utils/errorText";
 import {
 	readCollectionGridState,
@@ -40,6 +43,9 @@ interface UseCollectionGridOptions<
 	defaultSorter?: CollectionSorter[];
 	pageSize?: number;
 	rowSelection?: boolean;
+	dataKey?: string;
+	infiniteScroll?: Ref<InfiniteScrollOptions<TModel> | undefined>;
+	canEvict?: () => boolean;
 }
 
 interface SelectRowOptions {
@@ -123,6 +129,15 @@ export const useCollectionGrid = <
 	const selectedCell = shallowRef<GridCellPosition<TModel> | null>(null);
 	const markedKeySet = ref<Set<string>>(new Set(savedState?.markedKeys ?? []));
 	const markAnchorKey = ref<string | null>(savedState?.markAnchorKey ?? null);
+	const isInfinite = computed(() => options.infiniteScroll?.value !== undefined);
+	const infiniteConfig = computed(() => {
+		const config = options.infiniteScroll?.value;
+		return config ? {
+			...config,
+			keyFields: config.keyFields ?? (options.dataKey ? [options.dataKey] : undefined),
+		} : undefined;
+	});
+	const markedRowCache = new Map<string, TModel>();
 
 	const rowKey = (row: TModel): string => {
 		return makeStableKey(options.getKey(row));
@@ -141,6 +156,8 @@ export const useCollectionGrid = <
 			options.baseParams?.value?.sorter,
 			sorter.value,
 		);
+		const where = [options.initialParams?.where, options.baseParams?.value?.where]
+			.filter((item) => item !== undefined);
 
 		return {
 			...options.initialParams,
@@ -149,8 +166,31 @@ export const useCollectionGrid = <
 			count: rowsPerPage.value,
 			filter: filter.length > 0 ? filter : undefined,
 			sorter: effectiveSorter.length > 0 ? effectiveSorter : undefined,
+			...(where.length > 0 ? { where: where.length === 1 ? where[0] : { and: where } } : {}),
 		};
 	});
+
+	const infinite = useInfiniteCollection<TModel, TKey>({
+		api: options.api,
+		rows,
+		agg,
+		params: requestParams,
+		config: infiniteConfig,
+		columns: options.columns,
+		getKey: options.getKey,
+		canEvict: options.canEvict,
+	});
+
+	watch(infinite.loadingInitial, (value) => {
+		if (isInfinite.value) {
+			loading.value = value;
+		}
+	}, { flush: "sync" });
+	watch(infinite.error, (value) => {
+		if (isInfinite.value) {
+			error.value = value;
+		}
+	}, { flush: "sync" });
 
 	const singleSortField = computed(() => sorter.value[0]?.f ?? undefined);
 	const singleSortOrder = computed(() => {
@@ -162,6 +202,11 @@ export const useCollectionGrid = <
 	});
 
 	const markedRows = computed(() => {
+		if (isInfinite.value) {
+			return Array.from(markedKeySet.value)
+				.map((key) => rows.value.find((row) => rowKey(row) === key) ?? markedRowCache.get(key))
+				.filter((row): row is TModel => row !== undefined);
+		}
 		return rows.value.filter((row) => markedKeySet.value.has(rowKey(row)));
 	});
 
@@ -197,6 +242,9 @@ export const useCollectionGrid = <
 
 
 	const setSearchCriteria = (criteria: GridSearchCriterion[]): void => {
+		if (isInfinite.value) {
+			clearMarkedRows();
+		}
 		searchCriteria.value = criteria.map((item) => ({ ...item }));
 		first.value = 0;
 		saveState();
@@ -219,11 +267,24 @@ export const useCollectionGrid = <
 	};
 
 	const setMarkedKeys = (keys: Set<string>): void => {
+		if (isInfinite.value) {
+			for (const key of markedRowCache.keys()) {
+				if (!keys.has(key)) {
+					markedRowCache.delete(key);
+				}
+			}
+			for (const row of rows.value) {
+				if (keys.has(rowKey(row))) {
+					markedRowCache.set(rowKey(row), row);
+				}
+			}
+		}
 		markedKeySet.value = new Set(keys);
 		saveState();
 	};
 
 	const clearMarkedRows = (): void => {
+		markedRowCache.clear();
 		markedKeySet.value = new Set();
 		saveState();
 	};
@@ -364,7 +425,18 @@ export const useCollectionGrid = <
 		selectCell(row, 0, 0);
 	};
 
+	let loadGeneration = 0;
 	const load = async (): Promise<void> => {
+		const generation = ++loadGeneration;
+		if (isInfinite.value) {
+			await infinite.load();
+			if (generation === loadGeneration) {
+				totalRecords.value = Number(agg.value.tot_count ?? 0);
+				ensureSelection();
+				saveState();
+			}
+			return;
+		}
 		loading.value = true;
 		error.value = null;
 
@@ -386,6 +458,51 @@ export const useCollectionGrid = <
 			loading.value = false;
 		}
 	};
+
+	const refresh = async (anchor?: TModel): Promise<void> => {
+		if (!isInfinite.value) {
+			await load();
+			return;
+		}
+		await infinite.refresh(anchor);
+		if (!restoreSelection()) {
+			ensureSelection();
+		}
+		saveState();
+	};
+
+	const removeRows = (deletedRows: TModel[]): void => {
+		const keys = new Set(deletedRows.map(rowKey));
+		setMarkedKeys(new Set(Array.from(markedKeySet.value).filter((key) => !keys.has(key))));
+		if (isInfinite.value) {
+			infinite.removeRows(deletedRows);
+		} else {
+			rows.value = rows.value.filter((row) => !keys.has(rowKey(row)));
+		}
+		if (selectedRow.value && keys.has(rowKey(selectedRow.value))) {
+			selectRow(null);
+		}
+	};
+
+	watch(rows, (next, previous) => {
+		if (!isInfinite.value) {
+			return;
+		}
+		for (const row of [...previous, ...next]) {
+			if (markedKeySet.value.has(rowKey(row))) {
+				markedRowCache.set(rowKey(row), row);
+			}
+		}
+		if (selectedRow.value !== null) {
+			const index = next.findIndex((row) => rowKey(row) === rowKey(selectedRow.value!));
+			if (index >= 0) {
+				selectedRow.value = next[index];
+			}
+			if (selectedCell.value !== null) {
+				selectedCell.value = { ...selectedCell.value, rowIndex: index, row: selectedRow.value };
+			}
+		}
+	}, { flush: "sync" });
 
 	const setPage = (
 		newFirst: number,
@@ -529,7 +646,58 @@ export const useCollectionGrid = <
 		return true;
 	};
 
-	onMounted(load);
+	let keyboardPending = false;
+	const moveInfiniteCursor = async (event: KeyboardEvent): Promise<boolean> => {
+		if (!isInfinite.value || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) {
+			return handleGridArrowKey(event);
+		}
+		event.preventDefault();
+		if (keyboardPending || options.canEvict?.() === false) {
+			return true;
+		}
+		const direction = event.key === "ArrowDown" ? 1 : -1;
+		const currentIndex = selectedRowIndex.value;
+		const atBoundary = direction > 0
+			? currentIndex === rows.value.length - 1 && infinite.hasNext.value
+			: currentIndex === 0 && infinite.hasPrevious.value;
+		if (atBoundary) {
+			keyboardPending = true;
+			const selectedKey = selectedRow.value ? rowKey(selectedRow.value) : null;
+			const columnIndex = selectedCell.value?.columnIndex ?? 0;
+			try {
+				infinite.setVisibleRange(Math.max(currentIndex, 0), Math.max(currentIndex, 0));
+				if (direction > 0) {
+					await infinite.loadNext();
+				} else {
+					await infinite.loadPrevious();
+				}
+				const index = selectedKey === null ? -1 : rows.value.findIndex((row) => rowKey(row) === selectedKey);
+				if (index >= 0 && selectedRow.value && rowKey(selectedRow.value) === selectedKey) {
+					if (options.rowSelection ?? true) {
+						selectRow(rows.value[index], { resetMarkAnchor: !event.shiftKey });
+					} else {
+						selectCell(rows.value[index], index, columnIndex);
+					}
+					moveCursor(direction, 0, event);
+				}
+			} finally {
+				keyboardPending = false;
+			}
+		} else {
+			moveCursor(direction, 0, event);
+		}
+		return true;
+	};
+
+	onMounted(() => {
+		if (isInfinite.value) {
+			// Initial failures are rendered by the grid and retried explicitly.
+			void load().catch(() => undefined);
+			return;
+		}
+		return load();
+	});
+	onBeforeUnmount(infinite.dispose);
 	watch(requestParams, saveState, { deep: true });
 
 	return {
@@ -551,6 +719,19 @@ export const useCollectionGrid = <
 		singleSortField,
 		singleSortOrder,
 		load,
+		refresh,
+		removeRows,
+		isInfinite,
+		loadingMore: infinite.loadingNext,
+		loadingPrevious: infinite.loadingPrevious,
+		hasNext: infinite.hasNext,
+		hasPrevious: infinite.hasPrevious,
+		loadNext: infinite.loadNext,
+		loadPrevious: infinite.loadPrevious,
+		setVisibleRange: infinite.setVisibleRange,
+		infiniteChange: infinite.change,
+		infiniteRevision: infinite.revision,
+		moveInfiniteCursor,
 		setPage,
 		setSorter,
 		selectRow,
